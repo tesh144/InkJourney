@@ -1,0 +1,74 @@
+# ── Firebase SDK binaries (too large for GitHub, re-imported via Package Manager) ──
+Assets/Firebase/
+Assets/Firebase.meta
+
+# ── Unity ────────────────────────────────────────────────────
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+*.pidb
+*.suo
+*.userprefs
+*.sln.docstates
+*.booproj
+*.csproj
+*.unityproj
+*.DS_Store
+*.apk
+*.aab
+*.ipa
+*.xap
+.vs/
+ExportedObj/
+.consulo/
+*.csproj
+*.unityproj
+*.sln
+*.suo
+*.tmp
+*.user
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+crashlytics-build.properties
+Assets/AssetStoreTools*
+sysinfo.txt
+
+# ── Unity crash dumps ─────────────────────────────────────────
+mono_crash.*
+*.blob
+
+# ── Python ───────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+
+# ── Node / Firebase functions ─────────────────────────────────
+functions/node_modules/
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn-integrity
+*.tgz
+
+# ── Firebase ─────────────────────────────────────────────────
+.firebase/
+firebase-debug.log*
+firebase-debug.*.log*
+.env
+
+# ── macOS ─────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
