@@ -12,7 +12,9 @@ public class FriendsManager : MonoBehaviour
 
     [Header("List")]
     [SerializeField] Transform listParent;
+    [SerializeField] Transform suggestedListParent;
     [SerializeField] GameObject friendItemPrefab;
+    [SerializeField] GameObject addFriendFeedback;
 
     [Header("Search & Header")]
     [SerializeField] TMP_InputField searchInput;
@@ -549,5 +551,191 @@ public class FriendsManager : MonoBehaviour
         if (v is long l) return l;
         long.TryParse(v.ToString(), out long r);
         return r;
+    }
+
+    // ── Suggested friends ─────────────────────────────────────────────────
+
+    const string PendingSuggestionsKey   = "SuggestedFriends.Pending";
+    const string DismissedSuggestionsKey = "SuggestedFriends.Dismissed";
+
+    static HashSet<string> LoadIdSet(string key)
+    {
+        var raw = PlayerPrefs.GetString(key, "");
+        var set = new HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+        foreach (var id in raw.Split(','))
+            if (!string.IsNullOrEmpty(id)) set.Add(id);
+        return set;
+    }
+
+    static void SaveIdSet(string key, HashSet<string> set)
+    {
+        PlayerPrefs.SetString(key, string.Join(",", set));
+        PlayerPrefs.Save();
+    }
+
+    public void FetchSuggestedFriends()
+    {
+        if (!firebaseReady || db == null) return;
+        if (suggestedListParent == null || friendItemPrefab == null) return;
+
+        for (int i = suggestedListParent.childCount - 1; i >= 0; i--)
+            Destroy(suggestedListParent.GetChild(i).gameObject);
+
+        var pending   = LoadIdSet(PendingSuggestionsKey);
+        var dismissed = LoadIdSet(DismissedSuggestionsKey);
+
+        db.Collection(UserProfilesCollection)
+            .WhereEqualTo("isFakeUser", true)
+            .GetSnapshotAsync()
+            .ContinueWithOnMainThread(task =>
+            {
+                if (task.IsFaulted || task.IsCanceled) return;
+
+                foreach (var doc in task.Result.Documents)
+                {
+                    string uid = doc.Id;
+                    if (uid == UserProfileManager.instance?.UserId) continue;
+                    if (acceptedFriendIds.Contains(uid)) continue;
+                    if (pending.Contains(uid))   continue;
+                    if (dismissed.Contains(uid)) continue;
+
+                    var d = doc.ToDictionary();
+                    var data = new FriendData
+                    {
+                        userId       = uid,
+                        username     = GetString(d, "UserName"),
+                        profilePicId = GetInt(d, "profilePicID"),
+                        isFakeUser   = true,
+                        status       = FriendData.FriendStatus.Suggested
+                    };
+
+                    var go   = Object.Instantiate(friendItemPrefab, suggestedListParent);
+                    go.SetActive(true);
+                    var item = go.GetComponent<FriendListItem>();
+                    item?.Bind(data, this);
+                }
+            });
+    }
+
+    public void SendAddFriendRequest(FriendData data)
+    {
+        if (!firebaseReady || db == null || data == null) return;
+
+        string myId = UserProfileManager.instance?.UserId;
+        if (string.IsNullOrEmpty(myId)) return;
+
+        // Remove item from suggested list immediately
+        if (suggestedListParent != null)
+        {
+            for (int i = suggestedListParent.childCount - 1; i >= 0; i--)
+            {
+                var item = suggestedListParent.GetChild(i).GetComponent<FriendListItem>();
+                if (item != null && item.Data?.userId == data.userId)
+                {
+                    Destroy(item.gameObject);
+                    break;
+                }
+            }
+        }
+
+        // Track as pending so it's filtered on next open
+        var pending = LoadIdSet(PendingSuggestionsKey);
+        pending.Add(data.userId);
+        SaveIdSet(PendingSuggestionsKey, pending);
+
+        // Show feedback
+        if (addFriendFeedback != null)
+        {
+            addFriendFeedback.SetActive(true);
+            StartCoroutine(HideFeedbackAfterDelay());
+        }
+
+        long now = System.DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+        var request = new Dictionary<string, object>
+        {
+            { "fromUserId",       myId },
+            { "toUserId",         data.userId },
+            { "fromUsername",     UserProfileManager.instance.DisplayName },
+            { "fromProfilePicId", UserProfileManager.instance.ProfilePicID },
+            { "toUsername",       data.username },
+            { "toProfilePicId",   data.profilePicId },
+            { "status",           "pending" },
+            { "createdAt",        now }
+        };
+
+        db.Collection(FriendRequestsCollection).AddAsync(request).ContinueWithOnMainThread(addTask =>
+        {
+            if (addTask.IsFaulted || addTask.IsCanceled) return;
+            if (data.isFakeUser)
+                StartCoroutine(AutoAcceptCoroutine(addTask.Result.Id, data));
+        });
+    }
+
+    // Call this if a real user ever rejects our outgoing request.
+    public void DismissSuggestion(string userId)
+    {
+        var pending   = LoadIdSet(PendingSuggestionsKey);
+        var dismissed = LoadIdSet(DismissedSuggestionsKey);
+        pending.Remove(userId);
+        dismissed.Add(userId);
+        SaveIdSet(PendingSuggestionsKey, pending);
+        SaveIdSet(DismissedSuggestionsKey, dismissed);
+    }
+
+    IEnumerator HideFeedbackAfterDelay()
+    {
+        yield return new WaitForSeconds(3f);
+        if (addFriendFeedback != null) addFriendFeedback.SetActive(false);
+    }
+
+    IEnumerator AutoAcceptCoroutine(string requestId, FriendData fakeUser)
+    {
+        yield return new WaitForSeconds(UnityEngine.Random.Range(30f, 120f));
+
+        if (!firebaseReady || db == null) yield break;
+
+        string myId    = UserProfileManager.instance?.UserId;
+        string myName  = UserProfileManager.instance?.DisplayName;
+        int    myPicId = UserProfileManager.instance?.ProfilePicID ?? 0;
+        if (string.IsNullOrEmpty(myId)) yield break;
+
+        long now = System.DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+        db.Collection(UserProfilesCollection).Document(myId)
+            .Collection(FriendsSubcollection).Document(fakeUser.userId)
+            .SetAsync(new Dictionary<string, object>
+            {
+                { "userId", fakeUser.userId }, { "username", fakeUser.username },
+                { "profilePicId", fakeUser.profilePicId }, { "addedAt", now }
+            });
+
+        db.Collection(UserProfilesCollection).Document(fakeUser.userId)
+            .Collection(FriendsSubcollection).Document(myId)
+            .SetAsync(new Dictionary<string, object>
+            {
+                { "userId", myId }, { "username", myName },
+                { "profilePicId", myPicId }, { "addedAt", now }
+            });
+
+        db.Collection(FriendRequestsCollection).Document(requestId).DeleteAsync();
+
+        // Clear from pending now that it's accepted
+        var pending = LoadIdSet(PendingSuggestionsKey);
+        pending.Remove(fakeUser.userId);
+        SaveIdSet(PendingSuggestionsKey, pending);
+
+        acceptedFriendIds.Add(fakeUser.userId);
+        SpawnItem(new FriendData
+        {
+            userId       = fakeUser.userId,
+            username     = fakeUser.username,
+            profilePicId = fakeUser.profilePicId,
+            isFakeUser   = true,
+            status       = FriendData.FriendStatus.Accepted,
+        });
+        SortAcceptedItems();
+        RefreshFriendCount(acceptedFriendIds.Count);
+        FriendRequestBadge.instance?.Refresh();
     }
 }

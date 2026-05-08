@@ -140,6 +140,7 @@ static const CGFloat kTitleFontSize   = 24.0;
         self->_titleField.backgroundColor   = [UIColor clearColor];
         self->_titleField.borderStyle       = UITextBorderStyleNone;
         self->_titleField.returnKeyType     = UIReturnKeyNext;
+        self->_titleField.keyboardType      = UIKeyboardTypeASCIICapable;
         self->_titleField.keyboardAppearance = self->_hasCameraBackground
             ? UIKeyboardAppearanceDark : UIKeyboardAppearanceDefault;
         self->_titleField.delegate          = self;
@@ -161,6 +162,7 @@ static const CGFloat kTitleFontSize   = 24.0;
         self->_textView.backgroundColor         = [UIColor clearColor];
         self->_textView.textColor               = primaryText;
         self->_textView.font                    = self->_bodyFont;
+        self->_textView.keyboardType            = UIKeyboardTypeASCIICapable;
         self->_textView.keyboardAppearance      = self->_hasCameraBackground
             ? UIKeyboardAppearanceDark : UIKeyboardAppearanceDefault;
         self->_textView.autocorrectionType      = UITextAutocorrectionTypeDefault;

@@ -72,7 +72,8 @@ public class SeedTestJourney : MonoBehaviour
                 { "User",           "test" },
                 { "UserName",       "Test Journey" },
                 { "Tags",           new List<string> { "history", "fiction" } },
-                { "Likes",          0 },
+                { "Saves",          0 },
+                { "LikesCount",     0 },
                 { "Views",          0 },
                 { "Created",        1746057600L },
                 { "LastUpdated",    1746057600L },
@@ -80,7 +81,7 @@ public class SeedTestJourney : MonoBehaviour
                 { "PhotoUrl",       "" },
                 { "StickerID",      0 },
                 { "FontID",         0 },
-                { "LikedByUserIds", new List<string>() },
+                { "SavedByUserIds", new List<string>() },
                 { "Comments",       new List<object>() },
             };
 

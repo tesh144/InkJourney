@@ -297,6 +297,7 @@
   <div class="tab" onclick="showTab('browse')">Browse</div>
   <div class="tab" onclick="showTab('users')">Users</div>
   <div class="tab" onclick="showTab('journeys')">Journeys</div>
+  <div class="tab" onclick="showTab('config')">Config</div>
   <div class="tab" onclick="showTab('support')">Support <span id="support-badge" style="display:none;background:var(--danger);color:#fff;border-radius:20px;padding:1px 7px;font-size:11px;margin-left:4px;font-weight:700;"></span></div>
 </div>
 
@@ -786,6 +787,48 @@
   </div>
 </div>
 
+<!-- ══════════════════════════════════════════ CONFIG ══ -->
+<div class="page" id="page-config">
+  <div class="section-title">Story Lifetime</div>
+  <p style="font-size:13px;color:var(--muted);margin-bottom:20px">Controls how long stories stay visible and how interactions extend their life. Changes take effect in the app immediately after saving.</p>
+
+  <div class="form-grid">
+    <div class="field">
+      <label>Initial Lifetime (days)</label>
+      <input type="number" id="cfg-initialLifetimeDays" min="1" placeholder="365">
+    </div>
+    <div class="field">
+      <label>View Extension (hours)</label>
+      <input type="number" id="cfg-viewExtensionHours" min="0" placeholder="2">
+    </div>
+    <div class="field">
+      <label>Like Extension (hours)</label>
+      <input type="number" id="cfg-likeExtensionHours" min="0" placeholder="6">
+    </div>
+    <div class="field">
+      <label>Save Extension (hours)</label>
+      <input type="number" id="cfg-saveExtensionHours" min="0" placeholder="12">
+    </div>
+    <div class="field">
+      <label>Comment Extension (hours)</label>
+      <input type="number" id="cfg-commentExtensionHours" min="0" placeholder="24">
+    </div>
+    <div class="field">
+      <label>Boost Extension (hours)</label>
+      <input type="number" id="cfg-boostExtensionHours" min="0" placeholder="48">
+    </div>
+    <div class="field">
+      <label>Boost Daily Limit (per user)</label>
+      <input type="number" id="cfg-boostDailyLimit" min="1" placeholder="3">
+    </div>
+  </div>
+
+  <div style="display:flex;gap:12px;margin-top:24px;align-items:center">
+    <button class="btn btn-primary" onclick="saveLifetimeConfig()">Save Config</button>
+    <span id="cfg-status" style="font-size:13px;color:var(--muted)"></span>
+  </div>
+</div>
+
 <!-- Toast -->
 <div class="toast" id="toast"></div>
 
@@ -852,6 +895,7 @@ function showTab(name) {
   if (name === 'browse')   loadEntries();
   if (name === 'support')  loadTickets();
   if (name === 'journeys') jLoadJourneys();
+  if (name === 'config')   loadLifetimeConfig();
 }
 
 // ════════════════════════════════════════════════════════════
@@ -2668,6 +2712,47 @@ async function jDeleteJourney() {
 
 // Init tags
 renderTags('write');
+
+// ════════════════════════════════════════════════════════════
+//  Story Lifetime Config
+// ════════════════════════════════════════════════════════════
+const LIFETIME_CFG_FIELDS = [
+  'initialLifetimeDays', 'viewExtensionHours', 'likeExtensionHours',
+  'saveExtensionHours', 'commentExtensionHours', 'boostExtensionHours', 'boostDailyLimit'
+];
+const LIFETIME_CFG_DEFAULTS = {
+  initialLifetimeDays: 365, viewExtensionHours: 2, likeExtensionHours: 6,
+  saveExtensionHours: 12, commentExtensionHours: 24, boostExtensionHours: 48, boostDailyLimit: 3
+};
+
+function cfgKey(field) {
+  return field.charAt(0).toUpperCase() + field.slice(1);
+}
+
+function loadLifetimeConfig() {
+  db.collection('Config').doc('StoryLifetime').get().then(snap => {
+    const d = snap.exists ? snap.data() : {};
+    LIFETIME_CFG_FIELDS.forEach(f => {
+      const el = document.getElementById('cfg-' + f);
+      if (el) el.value = d[cfgKey(f)] ?? LIFETIME_CFG_DEFAULTS[f];
+    });
+    document.getElementById('cfg-status').textContent = snap.exists ? 'Loaded from Firestore' : 'Using defaults — not yet saved';
+  }).catch(e => showToast('Failed to load config: ' + e.message, 'error'));
+}
+
+function saveLifetimeConfig() {
+  const data = {};
+  for (const f of LIFETIME_CFG_FIELDS) {
+    const el = document.getElementById('cfg-' + f);
+    const v  = parseInt(el?.value, 10);
+    if (isNaN(v)) { showToast(`Invalid value for ${f}`, 'error'); return; }
+    data[cfgKey(f)] = v;
+  }
+  db.collection('Config').doc('StoryLifetime').set(data).then(() => {
+    document.getElementById('cfg-status').textContent = 'Saved ✓';
+    showToast('Story lifetime config saved');
+  }).catch(e => showToast('Save failed: ' + e.message, 'error'));
+}
 </script>
 </body>
 </html>

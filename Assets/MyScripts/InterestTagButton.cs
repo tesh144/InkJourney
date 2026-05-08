@@ -10,6 +10,8 @@ public class InterestTagButton : MonoBehaviour
     public GameObject selectedIndicator;
     public Button button;
 
+    public bool isStatic = false; // If true, the button won't toggle selection on click
+
     private void Awake()
     {
         if (button == null)
@@ -21,7 +23,7 @@ public class InterestTagButton : MonoBehaviour
         CollectLabelReferences();
     }
 
-    private void CollectLabelReferences()
+    public void CollectLabelReferences()
     {
         if (labelPrimary == null || labelSecondary == null)
         {
@@ -36,11 +38,15 @@ public class InterestTagButton : MonoBehaviour
     private void Start()
     {
         RefreshLabels();
-        SetSelected(UserProfileManager.instance?.HasInterest(tagId) == true);
+        if(!isStatic){        
+            SetSelected(UserProfileManager.instance?.HasInterest(tagId) == true);
+        }
     }
 
     public void OnClick()
     {
+        if (isStatic) return;
+
         if (UserProfileManager.instance == null || string.IsNullOrWhiteSpace(tagId))
             return;
 

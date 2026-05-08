@@ -26,6 +26,7 @@ public class JourneyManager : MonoBehaviour
     private readonly Dictionary<string, List<string>> progressCache = new Dictionary<string, List<string>>();
 
     private Coroutine _routeCoroutine;
+    private Coroutine _progressLoadCoroutine;
 
     private readonly List<MapPointer> spawnedChapterPointers = new List<MapPointer>();
 
@@ -87,12 +88,18 @@ public class JourneyManager : MonoBehaviour
 
         DrawJourneyRoute();
 
-        LoadProgressFromFirestore(journey.ID, () =>
+        if (_progressLoadCoroutine != null)
+            StopCoroutine(_progressLoadCoroutine);
+
+        _progressLoadCoroutine = StartCoroutine(LoadProgressWhenUserReady(journey.ID, () =>
         {
+            if (activeJourney == null || activeJourney.ID != journey.ID)
+                return;
+
             mapJourneyCard?.RefreshProgress();
             DrawJourneyRoute();
             GoogleSheetsFetcher.instance?.RefreshMap();
-        });
+        }));
     }
 
     public void DeactivateJourney()
@@ -101,8 +108,13 @@ public class JourneyManager : MonoBehaviour
             return;
 
         activeJourney = null;
-
         pendingJourneyPopup = null;
+
+        if (_progressLoadCoroutine != null)
+        {
+            StopCoroutine(_progressLoadCoroutine);
+            _progressLoadCoroutine = null;
+        }
 
         PlayerPrefs.DeleteKey(PrefKeyActiveId);
         PlayerPrefs.Save();
@@ -124,15 +136,37 @@ public class JourneyManager : MonoBehaviour
 
     public void OnJourneysLoaded()
     {
+        StartCoroutine(PrewarmJourneyPhotos());
+
         string savedId = PlayerPrefs.GetString(PrefKeyActiveId, "");
+        if (!string.IsNullOrEmpty(savedId))
+        {
+            var journey = GoogleSheetsFetcher.instance?.journeysList?.Find(j => j != null && j.ID == savedId);
+            if (journey != null)
+                ActivateJourney(journey, showPopup: false);
+        }
+    }
 
-        if (string.IsNullOrEmpty(savedId))
-            return;
+    private IEnumerator PrewarmJourneyPhotos()
+    {
+        // Wait for the map to finish its initial load before competing for bandwidth
+        yield return new WaitUntil(() => MapLoader.instance != null && !MapLoader.instance.IsMainMapReloading);
 
-        var journey = GoogleSheetsFetcher.instance?.journeysList?.Find(j => j != null && j.ID == savedId);
-
-        if (journey != null)
-            ActivateJourney(journey, showPopup: false);
+        var journeys = GoogleSheetsFetcher.instance?.journeysList;
+        if (journeys == null) yield break;
+        var fetcher = GoogleSheetsFetcher.instance;
+        foreach (var journey in journeys)
+        {
+            if (journey?.Chapters == null) continue;
+            foreach (var chapter in journey.Chapters)
+            {
+                if (string.IsNullOrEmpty(chapter.StoryId)) continue;
+                var story = fetcher.storiesList?.Find(e => e?.ID == chapter.StoryId)
+                         ?? fetcher.landmarksList?.Find(e => e?.ID == chapter.StoryId);
+                if (!string.IsNullOrEmpty(story?.PhotoUrl))
+                    yield return PhotoAsset.Prewarm(story.PhotoUrl);
+            }
+        }
     }
 
     public void OnStoryRead(string storyId)
@@ -236,7 +270,18 @@ public class JourneyManager : MonoBehaviour
             FirebaseFirestore.DefaultInstance
                 .Collection(UserProfilesCollection).Document(userId)
                 .Collection(ProgressSubcollection).Document(journeyId)
-                .DeleteAsync();
+                .DeleteAsync()
+                .ContinueWithOnMainThread(task =>
+                {
+                    if (task.IsFaulted || task.IsCanceled)
+                        Debug.LogWarning($"[Journey] Failed to delete Firestore progress: {task.Exception}");
+                    else
+                        Debug.Log($"[Journey] Deleted Firestore progress for {journeyId}");
+                });
+        }
+        else
+        {
+            Debug.LogWarning("[Journey] ResetActiveJourneyProgress: UserId empty, only local progress cleared.");
         }
 
         JourneyLibraryPanel.instance?.RefreshJourneyProgress();
@@ -622,12 +667,17 @@ public class JourneyManager : MonoBehaviour
     {
         string userId = UserProfileManager.instance?.UserId;
 
+        Debug.Log($"[Journey] PersistProgressToFirestore journeyId={journeyId}, userId={userId}, completed={completedChapterIds.Count}");
+
         if (string.IsNullOrEmpty(userId))
+        {
+            Debug.LogWarning("[Journey] Cannot persist progress — UserId is empty.");
             return;
+        }
 
         var data = new Dictionary<string, object>
         {
-            { "CompletedChapterIds", completedChapterIds },
+            { "CompletedChapterIds", new List<string>(completedChapterIds) },
             { "LastUpdatedAt", DateTimeOffset.UtcNow.ToUnixTimeSeconds() },
         };
 
@@ -637,17 +687,43 @@ public class JourneyManager : MonoBehaviour
             .SetAsync(data, SetOptions.MergeAll)
             .ContinueWithOnMainThread(task =>
             {
-                if (task.IsFaulted)
+                if (task.IsFaulted || task.IsCanceled)
                     Debug.LogWarning($"[Journey] Failed to persist progress: {task.Exception}");
+                else
+                    Debug.Log($"[Journey] Persisted progress to Firestore: UserProfiles/{userId}/{ProgressSubcollection}/{journeyId}");
             });
+    }
+
+    private IEnumerator LoadProgressWhenUserReady(string journeyId, Action onComplete = null)
+    {
+        float timeout = 10f;
+        float elapsed = 0f;
+
+        while ((UserProfileManager.instance == null || string.IsNullOrEmpty(UserProfileManager.instance.UserId)) && elapsed < timeout)
+        {
+            elapsed += Time.deltaTime;
+            yield return null;
+        }
+
+        if (UserProfileManager.instance == null || string.IsNullOrEmpty(UserProfileManager.instance.UserId))
+        {
+            Debug.LogWarning("[Journey] UserId still not ready after timeout. Firestore progress not loaded.");
+            onComplete?.Invoke();
+            yield break;
+        }
+
+        LoadProgressFromFirestore(journeyId, onComplete);
     }
 
     public void LoadProgressFromFirestore(string journeyId, Action onComplete = null)
     {
         string userId = UserProfileManager.instance?.UserId;
 
+        Debug.Log($"[Journey] LoadProgressFromFirestore journeyId={journeyId}, userId={userId}, hasUserProfileManager={UserProfileManager.instance != null}");
+
         if (string.IsNullOrEmpty(userId))
         {
+            Debug.LogWarning("[Journey] Cannot load progress yet — UserId is empty.");
             onComplete?.Invoke();
             return;
         }
@@ -658,21 +734,54 @@ public class JourneyManager : MonoBehaviour
             .GetSnapshotAsync()
             .ContinueWithOnMainThread(task =>
             {
-                if (!task.IsFaulted && !task.IsCanceled && task.Result.Exists)
+                if (task.IsFaulted || task.IsCanceled)
+                {
+                    Debug.LogWarning($"[Journey] Failed to load progress from Firestore: {task.Exception}");
+                    onComplete?.Invoke();
+                    return;
+                }
+
+                Debug.Log($"[Journey] Firestore progress exists={task.Result.Exists} path=UserProfiles/{userId}/{ProgressSubcollection}/{journeyId}");
+
+                if (task.Result.Exists)
                 {
                     var data = task.Result.ToDictionary();
 
                     if (data.TryGetValue("CompletedChapterIds", out object raw) && raw is IEnumerable<object> items)
                     {
-                        var list = new List<string>();
+                        var firestoreList = new List<string>();
 
                         foreach (var item in items)
                         {
                             if (item != null)
-                                list.Add(item.ToString());
+                                firestoreList.Add(item.ToString());
                         }
 
-                        progressCache[journeyId] = list;
+                        var merged = new List<string>();
+
+                        if (progressCache.TryGetValue(journeyId, out var existing))
+                        {
+                            foreach (var id in existing)
+                            {
+                                if (!string.IsNullOrEmpty(id) && !merged.Contains(id))
+                                    merged.Add(id);
+                            }
+                        }
+
+                        foreach (var id in firestoreList)
+                        {
+                            if (!string.IsNullOrEmpty(id) && !merged.Contains(id))
+                                merged.Add(id);
+                        }
+
+                        progressCache[journeyId] = merged;
+                        SaveProgressToPrefs(journeyId, merged);
+
+                        Debug.Log($"[Journey] Loaded progress from Firestore: {merged.Count} completed chapters [{string.Join(",", merged)}]");
+                    }
+                    else
+                    {
+                        Debug.Log("[Journey] Firestore progress doc exists, but CompletedChapterIds missing or invalid.");
                     }
                 }
 
@@ -699,7 +808,10 @@ public class JourneyManager : MonoBehaviour
             yield return req.SendWebRequest();
 
             if (req.result != UnityEngine.Networking.UnityWebRequest.Result.Success)
+            {
+                Debug.LogWarning($"[Journey] Completed route fetch failed: {req.error}");
                 yield break;
+            }
 
             var rawCoords = ParseGeoJsonCoords(req.downloadHandler.text);
 

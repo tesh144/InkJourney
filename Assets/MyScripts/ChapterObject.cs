@@ -82,7 +82,7 @@ public class ChapterObject : MonoBehaviour
         }
 
         if (likesText != null)
-            likesText.text = CompactCountFormatter.FormatLikes(e.Likes);
+            likesText.text = CompactCountFormatter.FormatLikes(e.Saves);
 
         if (viewsText != null)
             viewsText.text = CompactCountFormatter.FormatViews(e.Views);

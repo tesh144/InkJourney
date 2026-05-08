@@ -14,6 +14,8 @@ public class FriendListItem : MonoBehaviour
     [SerializeField] Button acceptButton;
     [SerializeField] Button rejectButton;
     [SerializeField] Button bodyButton;                // clicking the row opens friend library
+    [SerializeField] GameObject suggestedContainer;    // shown only for Suggested state
+    [SerializeField] Button addFriendButton;           // inside suggestedContainer
 
     [Header("Selection")]
     [SerializeField] GameObject selectedIndicator;     // highlight shown when this row is selected
@@ -29,6 +31,7 @@ public class FriendListItem : MonoBehaviour
         if (acceptButton   != null) acceptButton.onClick.AddListener(OnAcceptClicked);
         if (rejectButton   != null) rejectButton.onClick.AddListener(OnRejectClicked);
         if (bodyButton     != null) bodyButton.onClick.AddListener(OnBodyClicked);
+        if (addFriendButton != null) addFriendButton.onClick.AddListener(OnAddFriendClicked);
     }
 
     public void SetFriendLibraryPanel(FriendLibraryPanel panel) => friendLibraryPanel = panel;
@@ -39,30 +42,30 @@ public class FriendListItem : MonoBehaviour
         data    = friendData;
         manager = ownerManager;
 
-        bool isPending = data.status == FriendData.FriendStatus.PendingIncoming;
+        bool isPending   = data.status == FriendData.FriendStatus.PendingIncoming;
+        bool isSuggested = data.status == FriendData.FriendStatus.Suggested;
 
         if (usernameText != null)
             usernameText.text = data.username;
 
-        if (requestContainer != null)
-            requestContainer.SetActive(isPending);
+        if (requestContainer   != null) requestContainer.SetActive(isPending);
+        if (suggestedContainer != null) suggestedContainer.SetActive(isSuggested);
 
         if (unfriendButton != null)
-            unfriendButton.gameObject.SetActive(!isPending);
+            unfriendButton.gameObject.SetActive(!isPending && !isSuggested);
 
         if (statusText != null)
         {
-            statusText.gameObject.SetActive(!isPending);
-            if (!isPending)
+            statusText.gameObject.SetActive(!isPending && !isSuggested);
+            if (!isPending && !isSuggested)
                 statusText.text = data.isOnline ? "Online" : "Offline";
         }
 
         if (onlineIndicator != null)
-            onlineIndicator.SetActive(!isPending && data.isOnline);
+            onlineIndicator.SetActive(!isPending && !isSuggested && data.isOnline);
 
-        // Row click only makes sense for accepted friends
         if (bodyButton != null)
-            bodyButton.interactable = !isPending;
+            bodyButton.interactable = !isPending && !isSuggested;
 
         LoadAvatar();
     }
@@ -110,8 +113,9 @@ public class FriendListItem : MonoBehaviour
             friendLibraryPanel.Open(data, manager);
     }
 
-    void OnAcceptClicked()   => manager?.AcceptRequest(data);
-    void OnRejectClicked()   => manager?.RejectRequest(data);
+    void OnAcceptClicked()    => manager?.AcceptRequest(data);
+    void OnRejectClicked()    => manager?.RejectRequest(data);
+    void OnAddFriendClicked() => manager?.SendAddFriendRequest(data);
     void OnUnfriendClicked()
     {
         if (unfriendConfirmPanel != null)

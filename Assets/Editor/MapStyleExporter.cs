@@ -55,12 +55,10 @@ public static class MapStyleExporter
 
         sb.Append("  return a;");
 
-        string html     = File.ReadAllText(HtmlPath);
-        string pattern  = Regex.Escape(StartMarker) + @"[\s\S]*?" + Regex.Escape(EndMarker);
-        string newBlock = StartMarker + "\n" + sb + "\n  " + EndMarker;
-        string patched  = Regex.Replace(html, pattern, newBlock);
+        string html    = File.ReadAllText(HtmlPath);
+        string pattern = Regex.Escape(StartMarker) + @"[\s\S]*?" + Regex.Escape(EndMarker);
 
-        if (patched == html)
+        if (!Regex.IsMatch(html, pattern))
         {
             EditorUtility.DisplayDialog("Error",
                 $"Could not find the marker comments in inkjourney-admin.html.\n\n" +
@@ -68,7 +66,8 @@ public static class MapStyleExporter
             return;
         }
 
-        File.WriteAllText(HtmlPath, patched);
+        string newBlock = StartMarker + "\n" + sb + "\n  " + EndMarker;
+        File.WriteAllText(HtmlPath, Regex.Replace(html, pattern, newBlock));
 
         EditorUtility.DisplayDialog("Done",
             $"Exported {ml.mapStyles.Count} map style(s) into:\n{HtmlPath}\n\nReload the admin page in your browser.", "OK");

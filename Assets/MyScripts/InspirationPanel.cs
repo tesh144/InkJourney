@@ -445,8 +445,8 @@ public class InspirationPanel : MonoBehaviour
                 contextScores[t] = contextScores.TryGetValue(t, out float v) ? v + 2f : 2f;
 
         // Nearby place type tags (weight 1)
-        if (PlacesFetcher.instance != null)
-            foreach (var placeType in PlacesFetcher.instance.NearbyPlaceTypes)
+        if (MapLabelSpawner.instance != null)
+            foreach (var placeType in MapLabelSpawner.instance.NearbyPlaceTypes)
             {
                 var placeMap = placeTagMappings?.Find(m => m.placeType == placeType);
                 if (placeMap != null)

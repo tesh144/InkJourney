@@ -25,10 +25,10 @@ public static class LocalStoryStore
 
         public string ID, User, UserName, Title, Content, Theme, Track, Font, PhotoUrl;
         public float Latitude, Longitude;
-        public int Likes, Views;
+        public int Saves, LikesCount, Views;
         public long Created, LastUpdated, Expire;
-        public List<string> Tags        = new List<string>();
-        public List<string> LikedByUserIds = new List<string>();
+        public List<string> Tags           = new List<string>();
+        public List<string> SavedByUserIds = new List<string>();
         public List<StoredComment> Comments = new List<StoredComment>();
     }
 
@@ -75,13 +75,14 @@ public static class LocalStoryStore
             PhotoUrl     = s.PhotoUrl,
             Latitude     = s.Latitude,
             Longitude    = s.Longitude,
-            Likes        = s.Likes,
-            Views        = s.Views,
-            Created      = s.Created,
-            LastUpdated  = s.LastUpdated,
-            Expire       = s.Expire,
-            Tags            = s.Tags         ?? new List<string>(),
-            LikedByUserIds  = s.LikedByUserIds ?? new List<string>(),
+            Saves          = s.Saves,
+            LikesCount     = s.LikesCount,
+            Views          = s.Views,
+            Created        = s.Created,
+            LastUpdated    = s.LastUpdated,
+            Expire         = s.Expire,
+            Tags           = s.Tags            ?? new List<string>(),
+            SavedByUserIds = s.SavedByUserIds  ?? new List<string>(),
             Comments = ToLiveComments(s.Comments)
         };
     }
@@ -193,13 +194,14 @@ public static class LocalStoryStore
         PhotoUrl       = e.PhotoUrl,
         Latitude       = e.Latitude,
         Longitude      = e.Longitude,
-        Likes          = e.Likes,
+        Saves          = e.Saves,
+        LikesCount     = e.LikesCount,
         Views          = e.Views,
         Created        = e.Created,
         LastUpdated    = e.LastUpdated,
         Expire         = e.Expire,
-        Tags           = e.Tags          ?? new List<string>(),
-        LikedByUserIds = e.LikedByUserIds ?? new List<string>(),
+        Tags           = e.Tags            ?? new List<string>(),
+        SavedByUserIds = e.SavedByUserIds  ?? new List<string>(),
         Comments       = ToStoredComments(e.Comments)
     };
 }

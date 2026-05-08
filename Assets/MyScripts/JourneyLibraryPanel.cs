@@ -29,6 +29,9 @@ public class JourneyLibraryPanel : MonoBehaviour
     public Button stopJourneyButton;
     public RawImage journeyMapImage;
 
+    [Header("Photo Stack")]
+    public PhotoShuffle photoShuffle;
+
     [Header("Preview Map Pins")]
     public Color chapterPinColor = new Color(0.96f, 0.65f, 0.14f); // #f5a623
     public enum PinSize { Small, Medium, Large }
@@ -114,6 +117,26 @@ public class JourneyLibraryPanel : MonoBehaviour
         }
 
         ApplyFilters();
+        PrewarmAllPhotos();
+    }
+
+    private void PrewarmAllPhotos()
+    {
+        var journeys = GoogleSheetsFetcher.instance?.journeysList;
+        if (journeys == null) return;
+        var fetcher = GoogleSheetsFetcher.instance;
+        foreach (var journey in journeys)
+        {
+            if (journey?.Chapters == null) continue;
+            foreach (var chapter in journey.Chapters)
+            {
+                if (string.IsNullOrEmpty(chapter.StoryId)) continue;
+                var story = fetcher.storiesList?.Find(e => e?.ID == chapter.StoryId)
+                         ?? fetcher.landmarksList?.Find(e => e?.ID == chapter.StoryId);
+                if (!string.IsNullOrEmpty(story?.PhotoUrl))
+                    StartCoroutine(PhotoAsset.Prewarm(story.PhotoUrl));
+            }
+        }
     }
 
     // ── Selection ─────────────────────────────────────────────────────────
@@ -131,6 +154,8 @@ public class JourneyLibraryPanel : MonoBehaviour
     {
         var entry = selectedJourney?.entry;
         if (entry == null) return;
+
+        PopulatePhotoStack(entry);
 
         if (previewTitle != null)       previewTitle.text       = entry.Title ?? "";
         if (previewDescription != null) previewDescription.text = entry.Description ?? "";
@@ -160,6 +185,30 @@ public class JourneyLibraryPanel : MonoBehaviour
 
         RefreshStartStopButtons();
         LoadPreviewMap(entry);
+    }
+
+    private void PopulatePhotoStack(JourneyEntry entry)
+    {
+        if (photoShuffle == null) return;
+
+        var urls = new System.Collections.Generic.List<string>();
+        if (entry.Chapters != null)
+        {
+            var fetcher = GoogleSheetsFetcher.instance;
+            foreach (var chapter in entry.Chapters)
+            {
+                if (string.IsNullOrEmpty(chapter.StoryId)) continue;
+                var story = fetcher?.storiesList?.Find(e => e?.ID == chapter.StoryId)
+                         ?? fetcher?.landmarksList?.Find(e => e?.ID == chapter.StoryId);
+                if (!string.IsNullOrEmpty(story?.PhotoUrl))
+                    urls.Add(story.PhotoUrl);
+            }
+        }
+
+        if (urls.Count > 0)
+            photoShuffle.SpawnPhotos(urls);
+        else
+            photoShuffle.Clear();
     }
 
     private void RefreshStartStopButtons()
@@ -223,12 +272,10 @@ public class JourneyLibraryPanel : MonoBehaviour
 
     private System.Collections.IEnumerator LoadMapImage(string url)
     {
-        using (var req = UnityWebRequestTexture.GetTexture(url))
+        Texture2D tex = null;
+        yield return MapboxImageCache.Fetch(url, t => tex = t);
+        if (tex == null || journeyMapImage == null) yield break;
         {
-            yield return req.SendWebRequest();
-            if (req.result != UnityWebRequest.Result.Success || journeyMapImage == null) yield break;
-
-            var tex = ((DownloadHandlerTexture)req.downloadHandler).texture;
             journeyMapImage.texture = tex;
 
             // Center-crop so the texture fills the container without stretching

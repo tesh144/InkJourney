@@ -94,12 +94,14 @@ exports.onStoryRead = functions
 
     const db = admin.firestore();
 
-    const [authorSnap, storySnap] = await Promise.all([
+    const [authorSnap, storySnap, friendSnap] = await Promise.all([
       db.collection('UserProfiles').doc(authorId).get(),
       db.collection('Stories').doc(storyId).get(),
+      db.collection('UserProfiles').doc(authorId).collection('friends').doc(readerId).get(),
     ]);
 
     if (!authorSnap.exists) return null;
+    if (!friendSnap.exists) return null; // only notify author when a friend reads their story
 
     const authorData = authorSnap.data();
     const fcmToken   = authorData.fcmToken;

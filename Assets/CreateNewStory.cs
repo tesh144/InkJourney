@@ -46,6 +46,9 @@ public class CreateNewStory : MonoBehaviour
     private float editOriginalLongitude;
     private bool hasEditOriginalLocation;
 
+    [Header("Ink Reward")]
+    public InkRewardCounter inkRewardCounter;
+
     [Header("Safety")]
     public bool requirePhotoModerationBeforePosting = false;
 
@@ -77,9 +80,13 @@ public class CreateNewStory : MonoBehaviour
         RefreshTagButtonStates();
 
         if (title != null)
-            title.onValueChanged.AddListener(_ => RefreshPostValidationUI());
+            title.onValueChanged.AddListener(_ => { RefreshPostValidationUI(); RecalculateInkReward(); });
         if (content != null)
-            content.onValueChanged.AddListener(_ => RefreshPostValidationUI());
+            content.onValueChanged.AddListener(_ => { RefreshPostValidationUI(); RecalculateInkReward(); });
+
+        StickerManager.OnPreviewStickerChanged += _ => RecalculateInkReward();
+        FontManager.OnPreviewFontChanged       += _ => RecalculateInkReward();
+        if (photoManager != null) photoManager.onPhotoChanged += RecalculateInkReward;
 
         RefreshPostValidationUI();
     }
@@ -90,6 +97,7 @@ public class CreateNewStory : MonoBehaviour
 
         if (!isEditMode)
         {
+            ResetTagSelection();
             UpdateEntryLocation();
             StickerManager.ResetPreviewSticker();
             FontManager.ResetPreviewFont();
@@ -116,12 +124,15 @@ public class CreateNewStory : MonoBehaviour
 
         isEditMode            = false;
         hasEditOriginalLocation = false;
+        if (inkRewardCounter != null) inkRewardCounter.gameObject.SetActive(true);
     }
 
     // Called by LibraryManager to pre-fill the panel for editing an existing story
     public void LoadForEdit(GoogleSheetsFetcher.Entry e)
     {
         isEditMode = true;
+        inkRewardCounter?.ResetWithoutApplying();
+        if (inkRewardCounter != null) inkRewardCounter.gameObject.SetActive(false);
         entry = e;
         editOriginalLatitude = e != null ? e.Latitude : 0f;
         editOriginalLongitude = e != null ? e.Longitude : 0f;
@@ -150,6 +161,7 @@ public class CreateNewStory : MonoBehaviour
                 entry.Title = t;
                 entry.Content = c;
                 RefreshPostValidationUI();
+                RecalculateInkReward();
             }
         );
     }
@@ -207,6 +219,7 @@ public class CreateNewStory : MonoBehaviour
         _currentPrivacy = privacyTag.Trim();
         SyncSelectedTagsToEntry();
         RefreshPrivacyButtons();
+        RecalculateInkReward();
     }
 
     public void RegisterPrivacyButton(PrivacyButton btn)
@@ -274,6 +287,7 @@ public class CreateNewStory : MonoBehaviour
         TagManager.instance?.UpdateStoryTagCount(selectedTagIds.Count);
         RefreshTagButtonStates();
         RefreshPostValidationUI();
+        RecalculateInkReward();
     }
 
     public void RemoveTag(string tagId)
@@ -289,6 +303,7 @@ public class CreateNewStory : MonoBehaviour
         TagManager.instance?.UpdateStoryTagCount(selectedTagIds.Count);
         RefreshTagButtonStates();
         RefreshPostValidationUI();
+        RecalculateInkReward();
     }
 
     public void SetSelectedTags(IEnumerable<string> tags)
@@ -315,6 +330,7 @@ public class CreateNewStory : MonoBehaviour
         RefreshPrivacyButtons();
         TagManager.instance?.UpdateStoryTagCount(selectedTagIds.Count);
         RefreshPostValidationUI();
+        RecalculateInkReward();
     }
 
     private void RefreshTagButtons()
@@ -344,6 +360,20 @@ public class CreateNewStory : MonoBehaviour
         RefreshPrivacyButtons();
         TagManager.instance?.UpdateStoryTagCount(selectedTagIds.Count);
         RefreshPostValidationUI();
+    }
+
+    private void RecalculateInkReward()
+    {
+        if (inkRewardCounter == null || isEditMode) return;
+        inkRewardCounter.Recalculate(
+            content:       content?.text ?? "",
+            title:         title?.text ?? "",
+            tagCount:      selectedTagIds.Count,
+            hasSticker:    StickerManager.CurrentPreviewStickerID > 0,
+            hasPhoto:      photoManager != null && photoManager.CapturedPhoto != null,
+            isPublic:      _currentPrivacy == "public",
+            hasCustomFont: FontManager.CurrentPreviewFontID > 0
+        );
     }
 
     private void RefreshPostValidationUI()
@@ -503,7 +533,9 @@ public class CreateNewStory : MonoBehaviour
 
         entry.ID = $"{entry.User}_{entry.Latitude}_{entry.Longitude}";
         entry.Created = 1738925500;
-        entry.Expire = 32506915900;
+        entry.Expire = StoryLifetimeManager.instance != null
+            ? StoryLifetimeManager.instance.GetInitialExpire()
+            : DateTimeOffset.UtcNow.AddDays(365).ToUnixTimeSeconds();
 
         storyPanel.SetTypeIcon(entry);
         storyPanel.SetPhoto(photoManager != null ? photoManager.CapturedPhoto : null);
@@ -526,7 +558,9 @@ public class CreateNewStory : MonoBehaviour
 
         entry.ID = $"{entry.User}_{entry.Latitude}_{entry.Longitude}";
         entry.Created = 1738925500;
-        entry.Expire = 32506915900;
+        entry.Expire = StoryLifetimeManager.instance != null
+            ? StoryLifetimeManager.instance.GetInitialExpire()
+            : DateTimeOffset.UtcNow.AddDays(365).ToUnixTimeSeconds();
 
         storyPanel.gameObject.SetActive(true);
     }
@@ -566,7 +600,9 @@ public class CreateNewStory : MonoBehaviour
         SyncSelectedTagsToEntry();
         entry.ID = System.Guid.NewGuid().ToString("N");
         entry.Created = System.DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        entry.Expire = 32506915900;
+        entry.Expire = StoryLifetimeManager.instance != null
+            ? StoryLifetimeManager.instance.GetInitialExpire()
+            : DateTimeOffset.UtcNow.AddDays(365).ToUnixTimeSeconds();
         entry.PhotoUrl = "";
 
         var postEntry = entry;
@@ -581,6 +617,12 @@ public class CreateNewStory : MonoBehaviour
 
         // Spawn pin immediately — visible feedback before upload finishes
         GoogleSheetsFetcher.instance.SpawnNewMapPointer(postEntry);
+
+        // Queue reward into InkManager before FinishPost clears the form
+        if (inkRewardCounter != null && !isEditMode)
+            InkManager.instance?.QueueGain(inkRewardCounter.CurrentReward);
+        inkRewardCounter?.ResetWithoutApplying();
+
         FinishPost();
 
         if (jpegBytes != null)
@@ -638,6 +680,9 @@ public class CreateNewStory : MonoBehaviour
         SetShareButtonLabel("Preview");
         ObjectManager.instance.createStoryPanel.SetActive(false);
         RefreshPostValidationUI();
+
+        MapInputController.instance?.SnapToMaxZoom();
+        MapLoader.instance?.resetScrollRect?.ResetToCentre();
     }
 
     private void SetShareButtonLabel(string label)

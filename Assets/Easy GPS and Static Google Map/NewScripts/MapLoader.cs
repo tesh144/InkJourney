@@ -21,7 +21,7 @@ public class MapLoader : MonoBehaviour
     public ResetScrollRect resetScrollRect;
 
     private string areaName = "";
-    public Text showAreaName;
+    public TextMeshProUGUI showAreaName;
 
     private void Start()
     {
@@ -47,6 +47,7 @@ public class MapLoader : MonoBehaviour
         public Color     labelColor  = Color.white;
         public Color     labelStroke = Color.black;
         public AudioClip music;
+        public bool      isLocked    = false;
     }
 
     [Header("Map Styles")]
@@ -73,20 +74,76 @@ public class MapLoader : MonoBehaviour
     public float CurrentMapCenterLon { get; private set; }
     public int CurrentMapZoom => Mathf.RoundToInt(zoom);
 
+    [Header("Purchase Feedback")]
+    public GameObject purchaseSuccessPanel;
+    public GameObject purchaseFailPanel;
+
     [Header("Events")]
     [Tooltip("Fired when a map pointer is tapped but the player is not within range to read it")]
     public UnityEvent onPointerTappedOutOfRange;
 
-    private const string StylePrefKey = "MapStyleIndex";
+    private const string StylePrefKey          = "MapStyleIndex";
+    private const string UnlockedStylesPrefKey = "UnlockedStyleIndices";
 
     public static event System.Action onStyleChanged;
     public static event System.Action<bool> onMainMapReloadStateChanged;
+    public static event System.Action onStyleUnlocked;
+
+    private HashSet<int> _unlockedStyleIndices = new HashSet<int>();
 
     private void Awake()
     {
         SetMainMapReloading(true);
         instance = this;
+        LoadUnlockedStyles();
         ApplySavedStyle();
+    }
+
+    public bool IsStyleUnlocked(int index)
+    {
+        if (index < 0 || index >= mapStyles.Count) return false;
+        if (!mapStyles[index].isLocked) return true;
+        return _unlockedStyleIndices.Contains(index);
+    }
+
+    public void UnlockStyle(int index)
+    {
+        _unlockedStyleIndices.Add(index);
+        SaveUnlockedStyles();
+        onStyleUnlocked?.Invoke();
+    }
+
+    public void LockStyle(int index)
+    {
+        _unlockedStyleIndices.Remove(index);
+        SaveUnlockedStyles();
+        onStyleUnlocked?.Invoke();
+    }
+
+    public void ShowPurchaseFeedback(bool success)
+    {
+        if (success)
+        {
+            if (purchaseSuccessPanel != null) purchaseSuccessPanel.SetActive(true);
+        }
+        else
+        {
+            if (purchaseFailPanel != null) purchaseFailPanel.SetActive(true);
+        }
+    }
+
+    private void LoadUnlockedStyles()
+    {
+        _unlockedStyleIndices.Clear();
+        string raw = PlayerPrefs.GetString(UnlockedStylesPrefKey, "");
+        foreach (var part in raw.Split(','))
+            if (int.TryParse(part, out int i)) _unlockedStyleIndices.Add(i);
+    }
+
+    private void SaveUnlockedStyles()
+    {
+        PlayerPrefs.SetString(UnlockedStylesPrefKey, string.Join(",", _unlockedStyleIndices));
+        PlayerPrefs.Save();
     }
 
     private void SetMainMapReloading(bool reloading)
@@ -122,6 +179,7 @@ public class MapLoader : MonoBehaviour
     {
         if (mapStyles == null || mapStyles.Count == 0) return;
         currentStyleIndex = Mathf.Clamp(index, 0, mapStyles.Count - 1);
+        if (!IsStyleUnlocked(currentStyleIndex)) return;
         mapStyle = mapStyles[currentStyleIndex].styleString;
         PlayerPrefs.SetInt(StylePrefKey, currentStyleIndex);
         PlayerPrefs.Save();
@@ -329,7 +387,7 @@ public class MapLoader : MonoBehaviour
                     string adminArea     = ExtractDistrictFromMapbox(response);
                     location = MapPointer.BuildLocation(neighbourhood, city, adminArea)
                              ?? response.features[0].place_name;
-                    SetLabelTextAndRebuild(showAreaName, location);
+                    //SetLabelTextAndRebuild(showAreaName, location);
                 }
             }
             else
@@ -339,7 +397,7 @@ public class MapLoader : MonoBehaviour
         }
     }
 
-    private void SetLabelTextAndRebuild(Text label, string value)
+    private void SetLabelTextAndRebuild(TextMeshProUGUI label, string value)
     {
         if (label == null)
             return;

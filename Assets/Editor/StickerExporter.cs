@@ -61,13 +61,11 @@ public static class StickerExporter
 
         lines.Add("  return a;");
 
-        string newBlock    = string.Join("\n", lines);
-        string html        = File.ReadAllText(HtmlPath);
-        string pattern     = Regex.Escape(StartMarker) + @"[\s\S]*?" + Regex.Escape(EndMarker);
-        string replacement = StartMarker + "\n" + newBlock + "\n  " + EndMarker;
-        string patched     = Regex.Replace(html, pattern, replacement);
+        string newBlock = string.Join("\n", lines);
+        string html     = File.ReadAllText(HtmlPath);
+        string pattern  = Regex.Escape(StartMarker) + @"[\s\S]*?" + Regex.Escape(EndMarker);
 
-        if (patched == html)
+        if (!Regex.IsMatch(html, pattern))
         {
             EditorUtility.DisplayDialog("Error",
                 $"Could not find the marker comments in inkjourney-admin.html.\n\n" +
@@ -75,7 +73,7 @@ public static class StickerExporter
             return;
         }
 
-        File.WriteAllText(HtmlPath, patched);
+        File.WriteAllText(HtmlPath, Regex.Replace(html, pattern, StartMarker + "\n" + newBlock + "\n  " + EndMarker));
 
         EditorUtility.DisplayDialog("Done",
             $"Patched {exported} sticker icons ({sm.stickers.Count - 1} total) into:\n{HtmlPath}\n\n" +

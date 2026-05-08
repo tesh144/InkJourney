@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
+using UnityEngine.Events;
 
 /// <summary>
 /// Place on any POI prefab spawned by PlacesFetcher.
@@ -19,27 +20,66 @@ public class PlacePointer : MonoBehaviour
     [Tooltip("One sprite per map style, matched by index to MapLoader.mapStyles")]
     public Sprite[] styleSprites;
     public Image labelImage;
+    public Image backgroundImage;
+
+    [Header("Route")]
+    public Button routeButton;
 
     [Header("Scaling")]
     [Tooltip("When true the pointer scales with the map instead of staying a fixed screen size")]
     public bool scaleWithMap = false;
 
     private RectTransform _rt;
+    private static PlacePointer _activeRoutePointer;
 
     private void Awake()
     {
         _rt = GetComponent<RectTransform>();
+        if (routeButton != null)
+            routeButton.onClick.AddListener(OnRouteTapped);
+    }
+
+    private void OnRouteTapped()
+    {
+        if (MapRouteManager.instance == null || GPSManager.Instance == null) return;
+
+        if (_activeRoutePointer == this)
+        {
+            _activeRoutePointer = null;
+            MapRouteManager.instance.ClearRoutes(MapRouteManager.PlacePointerRouteType);
+            DestinationMarker.instance?.ClearDestination();
+            return;
+        }
+
+        _activeRoutePointer = this;
+        MapRouteManager.instance.DrawRoute(
+            MapRouteManager.PlacePointerRouteType,
+            GPSManager.Instance.latitude, GPSManager.Instance.longitude,
+            latitude, longitude);
+        DestinationMarker.instance?.SetDestination(_rt);
+    }
+
+    private void OnDestroy()
+    {
+        if (_activeRoutePointer == this)
+        {
+            _activeRoutePointer = null;
+            MapRouteManager.instance?.ClearRoutes(MapRouteManager.PlacePointerRouteType);
+            DestinationMarker.instance?.ClearDestination();
+        }
     }
 
     private void OnEnable()
     {
         MapLoader.onMainMapReloadStateChanged += OnReloadStateChanged;
+        MapLoader.onStyleChanged              += RefreshSprite;
         RefreshSprite();
     }
 
     private void OnDisable()
     {
         MapLoader.onMainMapReloadStateChanged -= OnReloadStateChanged;
+        MapLoader.onStyleChanged              -= RefreshSprite;
     }
 
     private void OnReloadStateChanged(bool reloading)
@@ -70,12 +110,16 @@ public class PlacePointer : MonoBehaviour
 
     private void RefreshSprite()
     {
-        if (labelImage == null || styleSprites == null || styleSprites.Length == 0) return;
-        if (MapLoader.instance == null) return;
+        if (labelImage == null || MapLoader.instance == null) return;
 
-        int idx = Mathf.Clamp(MapLoader.instance.currentStyleIndex, 0, styleSprites.Length - 1);
-        if (styleSprites[idx] != null)
+        int idx = Mathf.Clamp(MapLoader.instance.currentStyleIndex, 0,
+            MapLoader.instance.mapStyles.Count - 1);
+
+        if (labelImage != null && styleSprites != null && idx < styleSprites.Length && styleSprites[idx] != null)
             labelImage.sprite = styleSprites[idx];
+
+        if (backgroundImage != null)
+            backgroundImage.color = MapLoader.instance.mapStyles[idx].backgroundColor;
     }
 
     private void ApplyCounterTransform()

@@ -581,7 +581,7 @@ public class MapPointer : MonoBehaviour
         if (likesText == null)
             return;
 
-        int likes = entry != null ? Mathf.Max(0, entry.Likes) : 0;
+        int likes = entry != null ? Mathf.Max(0, entry.Saves) : 0;
         likesText.text = CompactCountFormatter.FormatLikes(likes);
     }
 

@@ -44,6 +44,8 @@ public class UI_StoryPanel : MonoBehaviour
     public Image cover;
     public List<Image> lines_buttons;
     public LikeButton likeButton;
+    public SaveButton saveButton;
+    public BoostButton boostButton;
     public StoryCommentsPanel commentsPanel;
 
     private string pendingProfilePicAuthorId;
@@ -87,30 +89,12 @@ public class UI_StoryPanel : MonoBehaviour
             photoContainer.SetActive(hasPhoto);
 
         if (hasPhoto && photoImage != null && MapLoader.instance != null)
-            MapLoader.instance.StartCoroutine(LoadPhotoFromUrl(photoUrl));
+            MapLoader.instance.StartCoroutine(PhotoAsset.LoadForStory(photoUrl, photoImage));
     }
 
     private IEnumerator LoadPhotoFromUrl(string url)
     {
-        using (var req = UnityEngine.Networking.UnityWebRequestTexture.GetTexture(url))
-        {
-            yield return req.SendWebRequest();
-
-            if (req.result == UnityEngine.Networking.UnityWebRequest.Result.Success)
-            {
-                photoImage.texture = ((UnityEngine.Networking.DownloadHandlerTexture)req.downloadHandler).texture;
-
-                if (photoContainer != null)
-                    photoContainer.SetActive(true);
-            }
-            else
-            {
-                Debug.LogWarning($"[Photo] Failed to load: {req.error}");
-
-                if (photoContainer != null)
-                    photoContainer.SetActive(false);
-            }
-        }
+        yield return PhotoAsset.LoadForStory(url, photoImage);
     }
 
     public void SetPhoto(Texture2D texture)
@@ -142,19 +126,21 @@ public class UI_StoryPanel : MonoBehaviour
         {
             Analytics.StoryRead(entry.ID);
             GoogleSheetsFetcher.instance?.RecordStoryView(entry.ID, entry.User);
+            StoryLifetimeManager.instance?.RecordView(entry);
             JourneyManager.instance?.OnStoryRead(entry.ID);
         }
 
+        if (boostButton != null)
+            boostButton.BindEntry(entry);
+
         if (likes != null)
-            likes.text = entry != null ? CompactCountFormatter.FormatLikes(entry.Likes) : "0";
+            likes.text = entry != null ? CompactCountFormatter.FormatLikes(entry.Saves) : "0";
+
+        if (saveButton != null)
+            saveButton.BindEntry(entry);
 
         if (likeButton != null)
-        {
-            if (likeButton.likesCountText == null)
-                likeButton.likesCountText = likes;
-
             likeButton.BindEntry(entry);
-        }
 
         SetTags(entry != null ? entry.Tags : null);
 

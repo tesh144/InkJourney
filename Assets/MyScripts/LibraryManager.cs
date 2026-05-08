@@ -324,7 +324,7 @@ public class LibraryManager : MonoBehaviour
                 : e.User == SystemInfo.deviceUniqueIdentifier;
 
         var liked = GoogleSheetsFetcher.instance.storiesList
-            .FindAll(e => GoogleSheetsFetcher.instance.IsLikedByCurrentUser(e) && !IsOwned(e));
+            .FindAll(e => GoogleSheetsFetcher.instance.IsSavedByCurrentUser(e) && !IsOwned(e));
 
         // Merge locally-saved collected stories that have expired from the server
         var liveCollectedIds = new HashSet<string>();
@@ -370,7 +370,7 @@ public class LibraryManager : MonoBehaviour
             if (previewExpires != null) previewExpires.text = StoryDateFormatter.FormatActive(e.Expire);
             if (previewDate    != null) previewDate.text    = isLandmark ? "Landmark" : StoryDateFormatter.FormatAgo(e.Created);
             if (previewContent != null) previewContent.text = e.Content;
-            if (previewLikes != null)   previewLikes.text = CompactCountFormatter.FormatLikes(e.Likes);
+            if (previewLikes != null)   previewLikes.text = CompactCountFormatter.FormatLikes(e.Saves);
             if (previewViews != null)   previewViews.text = CompactCountFormatter.FormatViews(e.Views);
             if (previewLocation != null)
             {
@@ -462,7 +462,7 @@ public class LibraryManager : MonoBehaviour
         ObjectManager.instance.storyPanel.SetAuthor(e.User, e.UserName);
         ObjectManager.instance.storyPanel.BindStoryEntry(e);
         ObjectManager.instance.storyPanel.views.text = CompactCountFormatter.FormatViews(e.Views);
-        ObjectManager.instance.storyPanel.likes.text = CompactCountFormatter.FormatLikes(e.Likes);
+        ObjectManager.instance.storyPanel.likes.text = CompactCountFormatter.FormatLikes(e.Saves);
         bool isLandmarkEntry = GoogleSheetsFetcher.IsLandmark(e);
         string storyLocation = !string.IsNullOrEmpty(e.cachedLocation) ? e.cachedLocation
             : (e.pointer != null && !string.IsNullOrEmpty(e.pointer.location) ? e.pointer.location : null);
@@ -505,8 +505,8 @@ public class LibraryManager : MonoBehaviour
         }
         else
         {
-            // Liked story — just unlike it, leave it on the server
-            GoogleSheetsFetcher.instance.ToggleLike(entry);
+            // Saved story — unsave it, leave it on the server
+            GoogleSheetsFetcher.instance.ToggleSave(entry);
             spawnedLikedChapters.Remove(selectedChapter);
         }
 
@@ -797,18 +797,15 @@ public class LibraryManager : MonoBehaviour
         string token = MapLoader.instance?.mapboxToken ?? "";
         string url = $"https://api.mapbox.com/styles/v1/{styleId}/static/{lon},{lat},{libraryMapZoom},0/640x640@2x?access_token={token}";
 
-        using (var www = UnityWebRequestTexture.GetTexture(url))
+        yield return MapboxImageCache.Fetch(url, tex =>
         {
-            yield return www.SendWebRequest();
-            if (www.result == UnityWebRequest.Result.Success && libraryMapImage != null)
+            if (libraryMapImage != null)
             {
                 libraryMapImage.color   = Color.white;
-                libraryMapImage.texture = ((DownloadHandlerTexture)www.downloadHandler).texture;
-                _libraryMapLoaded = true;
+                libraryMapImage.texture = tex;
             }
-            else
-                _libraryMapLoaded = true; // unblock the reveal even on failure
-        }
+            _libraryMapLoaded = true;
+        });
     }
 
 }

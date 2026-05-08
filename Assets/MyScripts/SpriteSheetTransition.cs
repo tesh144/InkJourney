@@ -108,10 +108,12 @@ public class SpriteSheetTransition : MonoBehaviour
         StartCoroutine(RunReveal(readyToReveal));
     }
 
-    /// <summary>Inspector-bindable: reveals only after the map has finished loading.</summary>
+    /// <summary>Inspector-bindable: reveals only after the map and labels have finished loading.</summary>
     public void RevealOnlyWhenMapLoaded()
     {
-        RevealOnly(() => MapLoader.instance != null && MapLoader.instance.mapLoaded);
+        RevealOnly(() =>
+            MapLoader.instance != null && MapLoader.instance.mapLoaded &&
+            (MapLabelSpawner.instance == null || MapLabelSpawner.instance.LabelsReady));
     }
 
     public void SetTransitionSet(int index)

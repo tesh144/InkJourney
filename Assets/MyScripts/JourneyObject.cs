@@ -1,5 +1,7 @@
+using System.Collections;
 using TMPro;
 using UnityEngine;
+using UnityEngine.Networking;
 using UnityEngine.UI;
 
 public class JourneyObject : MonoBehaviour
@@ -80,7 +82,16 @@ public class JourneyObject : MonoBehaviour
         }
 
         if (locationText != null)
-            locationText.text = firstStory?.pointer?.location ?? firstStory?.cachedLocation ?? "";
+        {
+            string loc = firstStory?.cachedLocation
+                      ?? firstStory?.pointer?.location
+                      ?? "";
+
+            if (!string.IsNullOrEmpty(loc))
+                locationText.text = loc;
+            else if (firstStory != null)
+                StartCoroutine(FetchLocation(firstStory));
+        }
 
         if (distanceText != null)
         {
@@ -116,6 +127,42 @@ public class JourneyObject : MonoBehaviour
         int completed = JourneyManager.instance.GetCompletedChapterIds(entry.ID).Count;
         if (progressBar  != null) progressBar.value = total > 0 ? (float)completed / total : 0f;
         if (progressText != null) progressText.text = $"{completed}/{total}";
+    }
+
+    private IEnumerator FetchLocation(GoogleSheetsFetcher.Entry story)
+    {
+        string token = MapLoader.instance?.mapboxToken ?? "";
+        string url   = $"https://api.mapbox.com/geocoding/v5/mapbox.places/{story.Longitude},{story.Latitude}.json?access_token={token}";
+
+        using var req = UnityWebRequest.Get(url);
+        yield return req.SendWebRequest();
+        if (req.result != UnityWebRequest.Result.Success) yield break;
+
+        var response = JsonUtility.FromJson<MapPointer.MapboxGeocodeResponse>(req.downloadHandler.text);
+        if (response?.features == null || response.features.Length == 0) yield break;
+
+        string neighbourhood = null, city = null, adminArea = null;
+        var first = response.features[0];
+        if (first.place_type != null &&
+            (System.Array.IndexOf(first.place_type, "neighborhood") >= 0 ||
+             System.Array.IndexOf(first.place_type, "locality")     >= 0))
+            neighbourhood = first.text;
+
+        if (first.context != null)
+            foreach (var ctx in first.context)
+            {
+                if (city      == null && ctx.id != null && (ctx.id.StartsWith("place.")    || ctx.id.StartsWith("locality."))) city      = ctx.text;
+                if (adminArea == null && ctx.id != null &&  ctx.id.StartsWith("district."))                                    adminArea = ctx.text;
+            }
+
+        if (city == null)
+            foreach (var feat in response.features)
+                if (feat.place_type != null && System.Array.IndexOf(feat.place_type, "place") >= 0)
+                { city = feat.text; break; }
+
+        string loc = MapPointer.BuildLocation(neighbourhood, city, adminArea) ?? first.place_name;
+        story.cachedLocation = loc;
+        if (locationText != null) locationText.text = loc;
     }
 
     // Assign to button OnClick

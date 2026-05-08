@@ -29,6 +29,8 @@ public class StoryPhotoManager : MonoBehaviour
     public GameObject zoom20Selected;
 
 
+    public event System.Action onPhotoChanged;
+
     public Texture2D CapturedPhoto { get; private set; }
 
     private Texture2D _existingPhotoTexture;
@@ -409,6 +411,7 @@ public class StoryPhotoManager : MonoBehaviour
         photoPreview.gameObject.SetActive(false);
         editDeleteButtons.SetActive(false);
         SetPlaceholderVisible(true);
+        onPhotoChanged?.Invoke();
     }
 
     // Call this when the story panel is closed/reset to clear state
@@ -426,6 +429,7 @@ public class StoryPhotoManager : MonoBehaviour
         photoPreview.gameObject.SetActive(true);
         editDeleteButtons.SetActive(true);
         SetPlaceholderVisible(false);
+        onPhotoChanged?.Invoke();
     }
 
     private void SetPlaceholderVisible(bool visible)

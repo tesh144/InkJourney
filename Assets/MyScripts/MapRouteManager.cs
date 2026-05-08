@@ -9,8 +9,9 @@ using UnityEngine.UI;
 public class MapRouteManager : MonoBehaviour
 {
     // ── Route type IDs ─────────────────────────────────────────────────────
-    public const string MapPointerRouteType  = "map_pointer";
-    public const string JourneyRouteType     = "journey";
+    public const string MapPointerRouteType   = "map_pointer";
+    public const string PlacePointerRouteType = "place_pointer";
+    public const string JourneyRouteType      = "journey";
     public const string JourneyTrailRouteType = "journey_trail";
 
     // ── Route type definition ──────────────────────────────────────────────
@@ -43,7 +44,8 @@ public class MapRouteManager : MonoBehaviour
     [Header("Route Types")]
     public List<RouteType> routeTypes = new List<RouteType>
     {
-        new RouteType { id = MapPointerRouteType,  color = new Color(0.2f, 0.9f, 1f, 0.85f) },
+        new RouteType { id = MapPointerRouteType,   color = new Color(0.2f, 0.9f, 1f, 0.85f) },
+        new RouteType { id = PlacePointerRouteType, color = new Color(0.2f, 0.9f, 1f, 0.85f) },
         new RouteType { id = JourneyRouteType,     color = new Color(1f, 0.82f, 0.2f, 0.9f),
                         dimColor = new Color(0.4f, 0.33f, 0.08f, 1f) },
         new RouteType { id = JourneyTrailRouteType, color = new Color(0.7f, 0.2f, 0.2f, 0.65f),
@@ -87,6 +89,7 @@ public class MapRouteManager : MonoBehaviour
     public GameObject loadingIndicator;
 
     // ── Private state ──────────────────────────────────────────────────────
+    private readonly Dictionary<string, List<float[]>> _routeCache = new Dictionary<string, List<float[]>>();
     private readonly Dictionary<string, List<ActiveRoute>> _routes =
         new Dictionary<string, List<ActiveRoute>>();
 
@@ -120,11 +123,22 @@ public class MapRouteManager : MonoBehaviour
         RouteType type = routeTypes.Find(r => r.id == typeId);
         if (type == null)
         {
-            Debug.LogWarning($"[MapRouteManager] Unknown route type '{typeId}'");
-            return;
+            type = new RouteType { id = typeId };
+            routeTypes.Add(type);
         }
 
         if (!type.allowMultiple) ClearRoutes(typeId);
+
+        // Mutual exclusion between map_pointer and place_pointer routes
+        if (typeId == MapPointerRouteType)
+        {
+            ClearRoutes(PlacePointerRouteType);
+            DestinationMarker.instance?.ClearDestination();
+        }
+        else if (typeId == PlacePointerRouteType)
+        {
+            ClearRoutes(MapPointerRouteType);
+        }
 
         if (_pendingFetch != null) StopCoroutine(_pendingFetch);
         _pendingFetch = StartCoroutine(FetchAndDraw(type, fromLat, fromLon, toLat, toLon));
@@ -329,40 +343,58 @@ public class MapRouteManager : MonoBehaviour
 
     // ── Fetch & Draw ───────────────────────────────────────────────────────
 
+    private static string RouteKey(float fromLat, float fromLon, float toLat, float toLon)
+    {
+        // Round origin to ~110m, destination to ~11m — nearby player positions reuse the same route
+        float fLat = Mathf.Round(fromLat * 1000f) / 1000f;
+        float fLon = Mathf.Round(fromLon * 1000f) / 1000f;
+        float tLat = Mathf.Round(toLat  * 10000f) / 10000f;
+        float tLon = Mathf.Round(toLon  * 10000f) / 10000f;
+        return $"{fLat}_{fLon}_{tLat}_{tLon}";
+    }
+
     private IEnumerator FetchAndDraw(RouteType type,
         float fromLat, float fromLon, float toLat, float toLon)
     {
-        if (loadingIndicator != null) loadingIndicator.SetActive(true);
+        string cacheKey = RouteKey(fromLat, fromLon, toLat, toLon);
 
-        string token = MapLoader.instance != null ? MapLoader.instance.mapboxToken : "";
-
-        string url =
-            "https://api.mapbox.com/directions/v5/mapbox/walking/" +
-            $"{F(fromLon)},{F(fromLat)};{F(toLon)},{F(toLat)}" +
-            $"?geometries=geojson&access_token={token}";
-
-        using var req = UnityWebRequest.Get(url);
-        yield return req.SendWebRequest();
-
-        if (loadingIndicator != null) loadingIndicator.SetActive(false);
-        _pendingFetch = null;
-
-        if (req.result != UnityWebRequest.Result.Success)
+        List<float[]> rawCoords;
+        if (_routeCache.TryGetValue(cacheKey, out rawCoords))
         {
-            Debug.LogWarning($"[MapRouteManager] Directions fetch failed: {req.error}");
-            yield break;
+            _pendingFetch = null;
         }
-
-        List<float[]> rawCoords = ParseCoordinates(req.downloadHandler.text);
-        if (rawCoords == null || rawCoords.Count < 2)
+        else
         {
-            Debug.LogWarning("[MapRouteManager] No usable coordinates in directions response.");
-            yield break;
-        }
+            if (loadingIndicator != null) loadingIndicator.SetActive(true);
 
-        // Bridge the road-snapped start/endpoints to the exact requested positions
-        rawCoords.Insert(0, new[] { fromLon, fromLat });
-        rawCoords.Add(new[] { toLon, toLat });
+            string token = MapLoader.instance != null ? MapLoader.instance.mapboxToken : "";
+            string url   = "https://api.mapbox.com/directions/v5/mapbox/walking/" +
+                           $"{F(fromLon)},{F(fromLat)};{F(toLon)},{F(toLat)}" +
+                           $"?geometries=geojson&access_token={token}";
+
+            using var req = UnityWebRequest.Get(url);
+            yield return req.SendWebRequest();
+
+            if (loadingIndicator != null) loadingIndicator.SetActive(false);
+            _pendingFetch = null;
+
+            if (req.result != UnityWebRequest.Result.Success)
+            {
+                Debug.LogWarning($"[MapRouteManager] Directions fetch failed: {req.error}");
+                yield break;
+            }
+
+            rawCoords = ParseCoordinates(req.downloadHandler.text);
+            if (rawCoords == null || rawCoords.Count < 2)
+            {
+                Debug.LogWarning("[MapRouteManager] No usable coordinates in directions response.");
+                yield break;
+            }
+
+            rawCoords.Insert(0, new[] { fromLon, fromLat });
+            rawCoords.Add(new[] { toLon, toLat });
+            _routeCache[cacheKey] = rawCoords;
+        }
 
         RectTransform container = routeContainer != null
             ? routeContainer

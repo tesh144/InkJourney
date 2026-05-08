@@ -1,5 +1,7 @@
+using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Text;
 using UnityEngine;
 using UnityEngine.Networking;
 using TMPro;
@@ -12,12 +14,18 @@ public class MapLabelSpawner : MonoBehaviour
     public GameObject stationLabelPrefab;
     public GameObject busStopLabelPrefab;
     public GameObject streetLabelPrefab;
+    public GameObject museumLabelPrefab;
+    public GameObject libraryLabelPrefab;
+    public GameObject worshipLabelPrefab;
+    public GameObject bookstoreLabelPrefab;
+    public GameObject cafeLabelPrefab;
+    public GameObject movieTheatreLabelPrefab;
 
     [Header("References")]
     public RectTransform mapParent;
 
     [Header("Settings")]
-    public float searchRadiusMeters = 1500f;
+    public float searchRadiusMeters   = 1500f;
     [Tooltip("Refetch labels if the player moves further than this from the last fetch point")]
     public float refetchThresholdMeters = 400f;
     [Tooltip("Labels closer than this (map canvas pixels) will be deduplicated — lower priority removed")]
@@ -29,34 +37,31 @@ public class MapLabelSpawner : MonoBehaviour
     public bool spawnStations       = true;
     public bool spawnBusStops       = true;
     public bool spawnStreets        = false;
+    public bool spawnMuseums        = true;
+    public bool spawnLibraries      = true;
+    public bool spawnWorship        = true;
+    public bool spawnBookstores     = true;
+    public bool spawnCafes          = true;
+    public bool spawnMovieTheatres  = true;
 
-    private readonly string apiKey = "AIzaSyDenug-6RiFj3ziSxtdrYQnS-qo0WhuBfI";
-
-    private struct LabelData
-    {
-        public GameObject obj;
-        public int priority;
-    }
+    private struct LabelData { public GameObject obj; public int priority; }
 
     private readonly List<LabelData> spawnedLabels = new List<LabelData>();
     private Vector2 lastFetchLatLon;
+    public static MapLabelSpawner instance;
+
     private bool isFetching = false;
     private bool hasFetched = false;
+    public bool LabelsReady => hasFetched && !isFetching;
 
-    private void OnEnable()
-    {
-        MapLoader.onStyleChanged += RefreshLabelColors;
-    }
+    public HashSet<string> NearbyPlaceTypes { get; } = new HashSet<string>();
 
-    private void OnDisable()
-    {
-        MapLoader.onStyleChanged -= RefreshLabelColors;
-    }
+    private void Awake() => instance = this;
 
-    private void Start()
-    {
-        StartCoroutine(WaitAndFetch());
-    }
+    private void OnEnable()  => MapLoader.onStyleChanged += RefreshLabelColors;
+    private void OnDisable() => MapLoader.onStyleChanged -= RefreshLabelColors;
+
+    private void Start() => StartCoroutine(WaitAndFetch());
 
     private void Update()
     {
@@ -64,8 +69,8 @@ public class MapLabelSpawner : MonoBehaviour
 
         if (!hasFetched || isFetching) return;
 
-        float lat = GPSManager.Instance.latitude;
-        float lon = GPSManager.Instance.longitude;
+        float lat  = GPSManager.Instance.latitude;
+        float lon  = GPSManager.Instance.longitude;
         float dist = DistanceMeters(lat, lon, lastFetchLatLon.x, lastFetchLatLon.y);
 
         if (dist > refetchThresholdMeters)
@@ -78,9 +83,9 @@ public class MapLabelSpawner : MonoBehaviour
         float parentScale = mapParent.localScale.x;
         if (parentScale <= 0f) return;
 
-        float inv        = 1f / parentScale;
-        Vector3 s        = Vector3.one * inv;
-        float counterRot = -mapParent.eulerAngles.z;
+        float    inv        = 1f / parentScale;
+        Vector3  s          = Vector3.one * inv;
+        float    counterRot = -mapParent.eulerAngles.z;
 
         foreach (var data in spawnedLabels)
         {
@@ -100,210 +105,173 @@ public class MapLabelSpawner : MonoBehaviour
 
     private IEnumerator FetchAll()
     {
-        isFetching = true;
-        hasFetched = true;
+        isFetching      = true;
+        hasFetched      = true;
         lastFetchLatLon = new Vector2(GPSManager.Instance.latitude, GPSManager.Instance.longitude);
 
         ClearLabels();
 
-        if (spawnParks)          yield return StartCoroutine(FetchPlacesByType(parkLabelPrefab,      priority: 1, "park"));
-        if (spawnBusStops)       yield return StartCoroutine(FetchPlacesByType(busStopLabelPrefab,   priority: 2, "bus_station"));
-        if (spawnStations)       yield return StartCoroutine(FetchPlacesByType(stationLabelPrefab,   priority: 3, "subway_station", "train_station"));
-        if (spawnNeighbourhoods) yield return StartCoroutine(FetchNeighbourhoods());
-        if (spawnStreets)        yield return StartCoroutine(FetchStreets());
+        yield return StartCoroutine(FetchPOILabels());
+        if (spawnStreets) yield return StartCoroutine(FetchStreets());
 
         yield return null;
         Canvas.ForceUpdateCanvases();
         DeduplicateByProximity();
+        SortLabelsByPriority();
 
         isFetching = false;
     }
 
-    // ── Places (generic) ───────────────────────────────────────────────────
+    // ── POI (single Overpass query for all types) ──────────────────────────
 
-    private IEnumerator FetchPlacesByType(GameObject prefab, int priority, params string[] types)
+    private IEnumerator FetchPOILabels()
     {
-        if (prefab == null) yield break;
-
         float lat = lastFetchLatLon.x;
         float lon = lastFetchLatLon.y;
-        HashSet<string> seen = new HashSet<string>();
+        float r   = searchRadiusMeters;
+        float nr  = r * 2f; // wider radius for neighbourhood labels
 
-        foreach (string type in types)
+        var q = new StringBuilder("[out:json][timeout:30];(");
+
+        if (spawnParks)
         {
-            string url = $"https://maps.googleapis.com/maps/api/place/nearbysearch/json" +
-                         $"?location={lat},{lon}&radius={searchRadiusMeters}&type={type}&key={apiKey}";
+            q.Append($"node[\"leisure\"=\"park\"](around:{r:F0},{lat:F6},{lon:F6});");
+            q.Append($"way[\"leisure\"=\"park\"](around:{r:F0},{lat:F6},{lon:F6});");
+        }
+        if (spawnBusStops)
+            q.Append($"node[\"highway\"=\"bus_stop\"](around:{r:F0},{lat:F6},{lon:F6});");
 
-            using (UnityWebRequest req = UnityWebRequest.Get(url))
-            {
-                yield return req.SendWebRequest();
+        if (spawnStations)
+            q.Append($"node[\"railway\"~\"station|halt|tram_stop\"](around:{r:F0},{lat:F6},{lon:F6});");
 
-                if (req.result != UnityWebRequest.Result.Success)
-                {
-                    Debug.LogWarning($"[MapLabels] Places fetch failed ({type}): {req.error}");
-                    continue;
-                }
+        if (spawnMuseums)
+        {
+            q.Append($"node[\"tourism\"=\"museum\"](around:{r:F0},{lat:F6},{lon:F6});");
+            q.Append($"way[\"tourism\"=\"museum\"](around:{r:F0},{lat:F6},{lon:F6});");
+        }
+        if (spawnLibraries)
+        {
+            q.Append($"node[\"amenity\"=\"library\"](around:{r:F0},{lat:F6},{lon:F6});");
+            q.Append($"way[\"amenity\"=\"library\"](around:{r:F0},{lat:F6},{lon:F6});");
+        }
+        if (spawnWorship)
+        {
+            q.Append($"node[\"amenity\"=\"place_of_worship\"](around:{r:F0},{lat:F6},{lon:F6});");
+            q.Append($"way[\"amenity\"=\"place_of_worship\"](around:{r:F0},{lat:F6},{lon:F6});");
+        }
+        if (spawnBookstores)
+            q.Append($"node[\"shop\"=\"books\"](around:{r:F0},{lat:F6},{lon:F6});");
 
-                PlacesResponse response = JsonUtility.FromJson<PlacesResponse>(req.downloadHandler.text);
-                if (response == null) continue;
+        if (spawnCafes)
+            q.Append($"node[\"amenity\"=\"cafe\"](around:{r:F0},{lat:F6},{lon:F6});");
 
-                if (response.status != "OK" && response.status != "ZERO_RESULTS")
-                {
-                    Debug.LogWarning($"[MapLabels] Places API error ({type}): {response.status}");
-                    continue;
-                }
+        if (spawnMovieTheatres)
+        {
+            q.Append($"node[\"amenity\"=\"cinema\"](around:{r:F0},{lat:F6},{lon:F6});");
+            q.Append($"way[\"amenity\"=\"cinema\"](around:{r:F0},{lat:F6},{lon:F6});");
+        }
+        if (spawnNeighbourhoods)
+        {
+            q.Append($"node[\"place\"~\"neighbourhood|suburb\"](around:{nr:F0},{lat:F6},{lon:F6});");
+            q.Append($"way[\"place\"~\"neighbourhood|suburb\"](around:{nr:F0},{lat:F6},{lon:F6});");
+        }
 
-                if (response.results == null) continue;
+        q.Append(");out center tags;");
 
-                foreach (var place in response.results)
-                {
-                    if (seen.Contains(place.name)) continue;
-                    seen.Add(place.name);
-                    SpawnLabel(prefab, priority, place.name, place.geometry.location.lat, place.geometry.location.lng);
-                }
-            }
+        string url = "https://overpass-api.de/api/interpreter?data=" + Uri.EscapeDataString(q.ToString());
+
+        using var req = UnityWebRequest.Get(url);
+        req.timeout = 35;
+        yield return req.SendWebRequest();
+
+        if (req.result != UnityWebRequest.Result.Success)
+        {
+            Debug.LogWarning($"[MapLabels] Overpass POI fetch failed: {req.error}");
+            yield break;
+        }
+
+        var response = JsonUtility.FromJson<OverpassResponse>(req.downloadHandler.text);
+        if (response?.elements == null) yield break;
+
+        var seen = new HashSet<string>();
+        NearbyPlaceTypes.Clear();
+
+        foreach (var el in response.elements)
+        {
+            if (el.tags == null) continue;
+            string name = el.tags.name;
+            if (string.IsNullOrEmpty(name) || seen.Contains(name)) continue;
+
+            float elLat = el.type == "node" ? el.lat : el.center.lat;
+            float elLon = el.type == "node" ? el.lon : el.center.lon;
+
+            var (prefab, priority, placeType) = ClassifyElement(el.tags);
+            if (prefab == null) continue;
+
+            seen.Add(name);
+            if (!string.IsNullOrEmpty(placeType)) NearbyPlaceTypes.Add(placeType);
+            SpawnLabel(prefab, priority, name, elLat, elLon);
         }
     }
 
-    // ── Streets ────────────────────────────────────────────────────────────
+    private (GameObject prefab, int priority, string placeType) ClassifyElement(OverpassTags t)
+    {
+        if (spawnParks         && t.leisure  == "park")                                                            return (parkLabelPrefab,         1, "park");
+        if (spawnBusStops      && t.highway  == "bus_stop")                                                        return (busStopLabelPrefab,       2, "bus_stop");
+        if (spawnStations      && (t.railway == "station" || t.railway == "halt" || t.railway == "tram_stop"))     return (stationLabelPrefab,       3, "train_station");
+        if (spawnMuseums       && t.tourism  == "museum")                                                          return (museumLabelPrefab,        2, "museum");
+        if (spawnLibraries     && t.amenity  == "library")                                                         return (libraryLabelPrefab,       2, "library");
+        if (spawnWorship       && t.amenity  == "place_of_worship")                                                return (worshipLabelPrefab,       1, "place_of_worship");
+        if (spawnBookstores    && t.shop     == "books")                                                            return (bookstoreLabelPrefab,     1, "book_store");
+        if (spawnCafes         && t.amenity  == "cafe")                                                            return (cafeLabelPrefab,          1, "cafe");
+        if (spawnMovieTheatres && t.amenity  == "cinema")                                                          return (movieTheatreLabelPrefab,  1, "movie_theater");
+        if (spawnNeighbourhoods && (t.place  == "neighbourhood" || t.place == "suburb"))                           return (neighbourhoodLabelPrefab, 4, null);
+        return (null, 0, null);
+    }
+
+    // ── Streets (Overpass way geometry) ───────────────────────────────────
 
     private IEnumerator FetchStreets()
     {
         if (streetLabelPrefab == null) yield break;
 
-        float playerLat = lastFetchLatLon.x;
-        float playerLon = lastFetchLatLon.y;
-        float s = 0.003f; // ~330 m
+        float lat = lastFetchLatLon.x;
+        float lon = lastFetchLatLon.y;
 
-        Vector2[] offsets =
+        string query = $"[out:json][timeout:15];way[\"highway\"][\"name\"](around:500,{lat:F6},{lon:F6});out geom tags;";
+        string url   = "https://overpass-api.de/api/interpreter?data=" + Uri.EscapeDataString(query);
+
+        using var req = UnityWebRequest.Get(url);
+        req.timeout = 20;
+        yield return req.SendWebRequest();
+
+        if (req.result != UnityWebRequest.Result.Success) yield break;
+
+        var response = JsonUtility.FromJson<OverpassGeomResponse>(req.downloadHandler.text);
+        if (response?.elements == null) yield break;
+
+        var seen = new HashSet<string>();
+
+        foreach (var way in response.elements)
         {
-            Vector2.zero,
-            new Vector2( s,  0f), new Vector2(-s,  0f),
-            new Vector2( 0f,  s), new Vector2( 0f, -s),
-        };
+            if (way.tags == null || string.IsNullOrEmpty(way.tags.name)) continue;
+            string name = way.tags.name;
+            if (seen.Contains(name) || way.geometry == null || way.geometry.Length < 2) continue;
+            seen.Add(name);
 
-        var roadHits = new Dictionary<string, List<(float sLat, float sLon, float vpRot)>>();
+            int   mid  = way.geometry.Length / 2;
+            float wLat = way.geometry[mid].lat;
+            float wLon = way.geometry[mid].lon;
 
-        foreach (var offset in offsets)
-        {
-            float sLat = playerLat + offset.x;
-            float sLon = playerLon + offset.y;
+            var a = way.geometry[Mathf.Max(0, mid - 1)];
+            var b = way.geometry[Mathf.Min(way.geometry.Length - 1, mid + 1)];
 
-            string url = $"https://maps.googleapis.com/maps/api/geocode/json" +
-                         $"?latlng={sLat},{sLon}&result_type=route&key={apiKey}";
+            float cosLat   = Mathf.Cos(wLat * Mathf.Deg2Rad);
+            float rotation = Mathf.Atan2(b.lat - a.lat, (b.lon - a.lon) * cosLat) * Mathf.Rad2Deg;
+            if (rotation >  90f) rotation -= 180f;
+            if (rotation < -90f) rotation += 180f;
 
-            using (UnityWebRequest req = UnityWebRequest.Get(url))
-            {
-                yield return req.SendWebRequest();
-                if (req.result != UnityWebRequest.Result.Success) continue;
-
-                GeocodeResponse resp = JsonUtility.FromJson<GeocodeResponse>(req.downloadHandler.text);
-                if (resp?.results == null || resp.results.Length == 0) continue;
-
-                var result = resp.results[0];
-                if (result.address_components == null) continue;
-
-                string name = null;
-                foreach (var comp in result.address_components)
-                    if (comp.types != null && System.Array.IndexOf(comp.types, "route") >= 0)
-                    { name = comp.long_name; break; }
-
-                if (string.IsNullOrEmpty(name)) continue;
-
-                float vpRot = 0f;
-                var vp = result.geometry?.viewport;
-                if (vp != null)
-                {
-                    float cosLat = Mathf.Cos(sLat * Mathf.Deg2Rad);
-                    vpRot = Mathf.Atan2(
-                        vp.northeast.lat - vp.southwest.lat,
-                        (vp.northeast.lng - vp.southwest.lng) * cosLat
-                    ) * Mathf.Rad2Deg;
-                    if (vpRot >  90f) vpRot -= 180f;
-                    if (vpRot < -90f) vpRot += 180f;
-                }
-
-                if (!roadHits.ContainsKey(name))
-                    roadHits[name] = new List<(float, float, float)>();
-                roadHits[name].Add((sLat, sLon, vpRot));
-            }
-        }
-
-        foreach (var kvp in roadHits)
-        {
-            string name    = kvp.Key;
-            var    hits    = kvp.Value;
-            float  lat     = hits[0].sLat;
-            float  lon     = hits[0].sLon;
-            float  cosLat  = Mathf.Cos(lat * Mathf.Deg2Rad);
-            float  rotation = hits[0].vpRot;
-
-            if (hits.Count >= 2)
-            {
-                float dLat = hits[1].sLat - hits[0].sLat;
-                float dLon = (hits[1].sLon - hits[0].sLon) * cosLat;
-                if (dLat * dLat + dLon * dLon > 1e-12f)
-                {
-                    rotation = Mathf.Atan2(dLat, dLon) * Mathf.Rad2Deg;
-                    if (rotation >  90f) rotation -= 180f;
-                    if (rotation < -90f) rotation += 180f;
-                }
-            }
-
-            SpawnLabel(streetLabelPrefab, priority: 1, name, lat, lon, rotation);
-        }
-    }
-
-    // ── Neighbourhoods ─────────────────────────────────────────────────────
-
-    private IEnumerator FetchNeighbourhoods()
-    {
-        if (neighbourhoodLabelPrefab == null) yield break;
-
-        float playerLat = lastFetchLatLon.x;
-        float playerLon = lastFetchLatLon.y;
-
-        float s = 0.006f;
-        Vector2[] offsets = new Vector2[]
-        {
-            new Vector2( 0,    0   ),
-            new Vector2( s,    0   ),
-            new Vector2(-s,    0   ),
-            new Vector2( 0,    s   ),
-            new Vector2( 0,   -s   ),
-            new Vector2( s,    s   ),
-            new Vector2(-s,   -s   ),
-            new Vector2( s,   -s   ),
-            new Vector2(-s,    s   ),
-        };
-
-        HashSet<string> seen = new HashSet<string>();
-
-        foreach (var offset in offsets)
-        {
-            float sampleLat = playerLat + offset.x;
-            float sampleLon = playerLon + offset.y;
-
-            string url = $"https://maps.googleapis.com/maps/api/geocode/json" +
-                         $"?latlng={sampleLat},{sampleLon}&result_type=neighborhood|sublocality&key={apiKey}";
-
-            using (UnityWebRequest req = UnityWebRequest.Get(url))
-            {
-                yield return req.SendWebRequest();
-
-                if (req.result != UnityWebRequest.Result.Success) continue;
-
-                GeocodeResponse response = JsonUtility.FromJson<GeocodeResponse>(req.downloadHandler.text);
-                if (response?.results == null || response.results.Length == 0) continue;
-
-                string name = response.results[0].address_components[0].long_name;
-
-                if (!seen.Contains(name))
-                {
-                    seen.Add(name);
-                    SpawnLabel(neighbourhoodLabelPrefab, priority: 4, name, sampleLat, sampleLon);
-                }
-            }
+            SpawnLabel(streetLabelPrefab, 1, name, wLat, wLon, rotation);
         }
     }
 
@@ -314,8 +282,6 @@ public class MapLabelSpawner : MonoBehaviour
         var toDestroy = new List<GameObject>();
         float threshold = Mathf.Max(1f, proximityThresholdPixels);
 
-        Debug.Log($"[MapLabels] Dedup: {spawnedLabels.Count} labels, threshold={threshold}px");
-
         for (int i = 0; i < spawnedLabels.Count; i++)
         {
             if (spawnedLabels[i].obj == null) continue;
@@ -325,14 +291,12 @@ public class MapLabelSpawner : MonoBehaviour
             for (int j = 0; j < spawnedLabels.Count; j++)
             {
                 if (i == j || spawnedLabels[j].obj == null) continue;
-                if (spawnedLabels[j].priority <= spawnedLabels[i].priority) continue;
+                if (spawnedLabels[j].priority < spawnedLabels[i].priority) continue;
                 RectTransform rtJ = spawnedLabels[j].obj.GetComponent<RectTransform>();
                 if (rtJ == null) continue;
 
-                float dist = Vector2.Distance(rtI.anchoredPosition, rtJ.anchoredPosition);
-                if (dist < threshold)
+                if (Vector2.Distance(rtI.anchoredPosition, rtJ.anchoredPosition) < threshold)
                 {
-                    Debug.Log($"[MapLabels] Removing '{spawnedLabels[i].obj.name}' (pri={spawnedLabels[i].priority}) near '{spawnedLabels[j].obj.name}' (pri={spawnedLabels[j].priority}), dist={dist:F1}");
                     toDestroy.Add(spawnedLabels[i].obj);
                     break;
                 }
@@ -344,27 +308,44 @@ public class MapLabelSpawner : MonoBehaviour
             spawnedLabels.RemoveAll(d => d.obj == obj);
             Destroy(obj);
         }
-
-        Debug.Log($"[MapLabels] Dedup removed {toDestroy.Count}, {spawnedLabels.Count} remain");
     }
 
-    // ── Shared ─────────────────────────────────────────────────────────────
+    public List<Vector2> GetSpawnedLatLons()
+    {
+        var positions = new List<Vector2>();
+        foreach (var data in spawnedLabels)
+        {
+            if (data.obj == null) continue;
+            var pp = data.obj.GetComponent<PlacePointer>();
+            if (pp != null) positions.Add(new Vector2(pp.latitude, pp.longitude));
+        }
+        return positions;
+    }
+
+    // ── Sorting ────────────────────────────────────────────────────────────
+
+    private void SortLabelsByPriority()
+    {
+        spawnedLabels.Sort((a, b) => a.priority.CompareTo(b.priority));
+        for (int i = 0; i < spawnedLabels.Count; i++)
+            if (spawnedLabels[i].obj != null)
+                spawnedLabels[i].obj.transform.SetSiblingIndex(i);
+    }
+
+    // ── Shared spawn ───────────────────────────────────────────────────────
 
     private void SpawnLabel(GameObject prefab, int priority, string labelText, float lat, float lon, float rotation = 0f)
     {
-        Vector2 pos = GPSToMapPosition(lat, lon);
-
-        GameObject obj = Instantiate(prefab, mapParent);
-        RectTransform rt = obj.GetComponent<RectTransform>();
-        rt.anchoredPosition = pos;
+        GameObject    obj = Instantiate(prefab, mapParent);
+        RectTransform rt  = obj.GetComponent<RectTransform>();
+        rt.anchoredPosition = GPSToMapPosition(lat, lon);
         rt.localEulerAngles = new Vector3(0f, 0f, rotation);
 
+        PlacePointer pp = obj.GetComponent<PlacePointer>();
+        if (pp != null) { pp.latitude = lat; pp.longitude = lon; pp.mapTransform = mapParent; }
+
         TextMeshProUGUI tmp = obj.GetComponentInChildren<TextMeshProUGUI>();
-        if (tmp != null)
-        {
-            tmp.text  = labelText;
-            tmp.color = CurrentLabelColor();
-        }
+        if (tmp != null) { tmp.text = labelText; tmp.color = CurrentLabelColor(); }
 
         spawnedLabels.Add(new LabelData { obj = obj, priority = priority });
     }
@@ -375,7 +356,7 @@ public class MapLabelSpawner : MonoBehaviour
         foreach (var data in spawnedLabels)
         {
             if (data.obj == null) continue;
-            TextMeshProUGUI tmp = data.obj.GetComponentInChildren<TextMeshProUGUI>();
+            var tmp = data.obj.GetComponentInChildren<TextMeshProUGUI>();
             if (tmp != null) tmp.color = c;
         }
     }
@@ -390,14 +371,14 @@ public class MapLabelSpawner : MonoBehaviour
 
     private Vector2 GPSToMapPosition(float lat, float lon)
     {
-        float playerLat = GPSManager.Instance.latitude;
-        float playerLon = GPSManager.Instance.longitude;
-        float mapScale = 6f * Mathf.Pow(2f, MapLoader.instance.zoom - 14f);
-
-        float x = (lon - playerLon) * (111320f * Mathf.Cos(playerLat * Mathf.Deg2Rad)) * mapScale;
-        float y = (lat - playerLat) * 111320f * mapScale;
-
-        return new Vector2(x, y);
+        float   centerLat    = GPSManager.Instance.latitude;
+        float   centerLon    = GPSManager.Instance.longitude;
+        int     zoom         = MapLoader.instance.CurrentMapZoom;
+        Vector2 p            = MapLoader.instance.LatLonToPixel(lat, lon, zoom);
+        Vector2 c            = MapLoader.instance.LatLonToPixel(centerLat, centerLon, zoom);
+        float   contentWidth = mapParent != null ? mapParent.rect.width : 640f;
+        float   scale        = contentWidth / 320f;
+        return new Vector2((p.x - c.x) * scale, (c.y - p.y) * scale);
     }
 
     private void ClearLabels()
@@ -414,16 +395,14 @@ public class MapLabelSpawner : MonoBehaviour
         return Mathf.Sqrt(dx * dx + dy * dy);
     }
 
-    // ── JSON types ─────────────────────────────────────────────────────────
+    // ── Overpass JSON types ────────────────────────────────────────────────
 
-    [System.Serializable] class PlacesResponse  { public string status; public PlaceResult[] results; }
-    [System.Serializable] class PlaceResult     { public string name; public PlaceGeometry geometry; }
-    [System.Serializable] class PlaceGeometry   { public LatLon location; }
-    [System.Serializable] class LatLon          { public float lat; public float lng; }
+    [Serializable] class OverpassResponse    { public OverpassElement[] elements; }
+    [Serializable] class OverpassElement     { public string type; public float lat; public float lon; public OverpassCenter center; public OverpassTags tags; }
+    [Serializable] class OverpassCenter      { public float lat; public float lon; }
+    [Serializable] class OverpassTags        { public string name; public string leisure; public string amenity; public string tourism; public string shop; public string highway; public string railway; public string place; }
 
-    [System.Serializable] class GeocodeResponse   { public GeocodeResult[]  results; }
-    [System.Serializable] class GeocodeResult    { public AddressComponent[] address_components; public GeocodeGeometry geometry; }
-    [System.Serializable] class GeocodeGeometry  { public LatLon location; public GeocodeViewport viewport; }
-    [System.Serializable] class GeocodeViewport  { public LatLon northeast; public LatLon southwest; }
-    [System.Serializable] class AddressComponent { public string long_name; public string[] types; }
+    [Serializable] class OverpassGeomResponse { public OverpassWay[]  elements; }
+    [Serializable] class OverpassWay          { public OverpassNode[] geometry; public OverpassTags tags; }
+    [Serializable] class OverpassNode         { public float lat; public float lon; }
 }
