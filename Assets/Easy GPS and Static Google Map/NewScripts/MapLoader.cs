@@ -42,12 +42,13 @@ public class MapLoader : MonoBehaviour
     {
         public string name;
         [TextArea(1, 5)] public string styleString;
-        public Color     backgroundColor = new Color(0.1f, 0.1f, 0.1f);
-        public bool      showLabels  = false;
-        public Color     labelColor  = Color.white;
-        public Color     labelStroke = Color.black;
-        public AudioClip music;
-        public bool      isLocked    = false;
+        public Color      backgroundColor = new Color(0.1f, 0.1f, 0.1f);
+        public bool       showLabels  = false;
+        public Color      labelColor  = Color.white;
+        public Color      labelStroke = Color.black;
+        public AudioClip  music;
+        public bool       isLocked    = false;
+        public ThemeObject defaultTheme;
     }
 
     [Header("Map Styles")]

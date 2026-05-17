@@ -14,6 +14,7 @@ public class ThemeManager : MonoBehaviour
     public Image themeDisplayTab;
     public Image themePostWindowBD;
     public Text themeSelectText;
+    public Image creationBackdrop;
 
     public static ThemeManager instance;
 
@@ -48,8 +49,17 @@ public class ThemeManager : MonoBehaviour
         RefreshSfxButton();
     }
 
-    private void OnEnable()  => MapLoader.onStyleChanged += ApplyMapStyleMusic;
-    private void OnDisable() => MapLoader.onStyleChanged -= ApplyMapStyleMusic;
+    private void OnEnable()
+    {
+        MapLoader.onStyleChanged += ApplyMapStyleMusic;
+        MapLoader.onStyleChanged += ApplyMapStyleTheme;
+    }
+
+    private void OnDisable()
+    {
+        MapLoader.onStyleChanged -= ApplyMapStyleMusic;
+        MapLoader.onStyleChanged -= ApplyMapStyleTheme;
+    }
 
     private void Start()
     {
@@ -58,6 +68,19 @@ public class ThemeManager : MonoBehaviour
     }
 
     // ── Map style music ────────────────────────────────────────────────────
+
+    private void ApplyMapStyleTheme()
+    {
+        var styles = MapLoader.instance?.mapStyles;
+        if (styles == null || styles.Count == 0) return;
+        int idx = Mathf.Clamp(MapLoader.instance.currentStyleIndex, 0, styles.Count - 1);
+        ThemeObject theme = styles[idx].defaultTheme;
+        if (theme == null) return;
+        SetPostToTheme(theme);
+        SetTheme(theme.themeName);
+    }
+
+    public void ApplyCurrentMapStyleTheme() => ApplyMapStyleTheme();
 
     private void ApplyMapStyleMusic()
     {
@@ -79,11 +102,17 @@ public class ThemeManager : MonoBehaviour
 
     public void SetPostToTheme(ThemeObject theme)
     {
-        themePostWindowBD.sprite = theme.backdrop;
-        themePostWindowBD.gameObject.SetActive(theme.backdrop != null);
-        themeDisplayTab.color = theme.tabColor;
-        themeSelectText.color = theme.color_title;
-        themeSelectText.text = "Theme: " + theme.themeName;
+        if (themePostWindowBD != null)
+        {
+            themePostWindowBD.sprite = theme.backdrop;
+            themePostWindowBD.gameObject.SetActive(theme.backdrop != null);
+        }
+        if (themeDisplayTab != null) themeDisplayTab.color = theme.tabColor;
+        if (themeSelectText != null)
+        {
+            themeSelectText.color = theme.color_title;
+            themeSelectText.text = "Theme: " + theme.themeName;
+        }
         selectedTheme = theme;
     }
 
@@ -107,8 +136,11 @@ public class ThemeManager : MonoBehaviour
         if (string.IsNullOrEmpty(id)) return;
         if (storyPanel == null) storyPanel = ObjectManager.instance?.storyPanel;
         ThemeObject themeObj = GetThemeByName(id);
-        if (themeObj == null || storyPanel == null) return;
+        if (themeObj == null) return;
 
+        if (creationBackdrop != null)                 creationBackdrop.sprite = themeObj.backdrop;
+
+        if (storyPanel == null) return;
         if (storyPanel.backdrop != null)              storyPanel.backdrop.sprite = themeObj.backdrop;
         if (storyPanel.cover != null)                 storyPanel.cover.color = themeObj.color_cover;
         if (storyPanel.content != null)               storyPanel.content.color = themeObj.color_content;

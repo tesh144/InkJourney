@@ -18,7 +18,7 @@ MonoBehaviour:
   drawingConfig:
     configs:
     - DrawnTypeName: StickerManager, Assembly-CSharp
-      EditorTypeName: 
+      EditorTypeName: Sirenix.OdinInspector.Editor.OdinEditor, Sirenix.OdinInspector.Editor
     - DrawnTypeName: TagManager, Assembly-CSharp
       EditorTypeName: Sirenix.OdinInspector.Editor.OdinEditor, Sirenix.OdinInspector.Editor
     - DrawnTypeName: FontManager, Assembly-CSharp

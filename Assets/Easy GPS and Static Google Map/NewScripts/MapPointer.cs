@@ -54,6 +54,8 @@ public class MapPointer : MonoBehaviour
     public TextMeshProUGUI likesText;
     public GameObject myStoryIndicator;
     public GameObject recentIndicator;
+    [Tooltip("Shown when this story is a local draft (not yet published to server)")]
+    public GameObject draftIndicator;
 
     // ── Proximity Styling ──────────────────────────────────────────────────
     [Header("Proximity Styling")]
@@ -333,12 +335,15 @@ public class MapPointer : MonoBehaviour
                 dateText.gameObject.SetActive(true);
             }
 
-            // Show photo below if available
-            bool hasPhoto = entry != null && !string.IsNullOrEmpty(entry.PhotoUrl);
-            if (hasPhoto)
+            // Show photo — fall back to pending local file if the upload hasn't finished yet
+            string photoUrl = entry?.PhotoUrl ?? "";
+            if (string.IsNullOrEmpty(photoUrl) && entry != null && PhotoUploadQueue.HasPending(entry.ID))
+                photoUrl = "file://" + PhotoUploadQueue.FilePath(entry.ID);
+
+            if (!string.IsNullOrEmpty(photoUrl))
             {
                 if (!photoLoaded)
-                    MapLoader.instance.StartCoroutine(LoadPhoto(entry.PhotoUrl));
+                    MapLoader.instance.StartCoroutine(LoadPhoto(photoUrl));
                 else if (photoImage != null)
                     photoImage.gameObject.SetActive(true);
             }
@@ -453,6 +458,9 @@ public class MapPointer : MonoBehaviour
     public void BindEntry(GoogleSheetsFetcher.Entry e)
     {
         entry = e;
+        photoLoaded = false;
+        if (photoImage != null) photoImage.gameObject.SetActive(false);
+
         if (textbox != null)
         {
             textbox.text = e?.Title ?? "";
@@ -471,9 +479,14 @@ public class MapPointer : MonoBehaviour
 
     private void RefreshOwnerVisuals()
     {
+        bool isDraft = entry != null && entry.IsLocalDraft;
+
+        if (draftIndicator != null)
+            draftIndicator.SetActive(isDraft);
+
         if (myStoryIndicator != null)
         {
-            bool isOwner = entry != null && (UserProfileManager.instance != null
+            bool isOwner = !isDraft && entry != null && (UserProfileManager.instance != null
                 ? UserProfileManager.instance.IsCurrentUser(entry.User)
                 : entry.User == SystemInfo.deviceUniqueIdentifier);
             myStoryIndicator.SetActive(isOwner);
@@ -482,12 +495,12 @@ public class MapPointer : MonoBehaviour
         if (recentIndicator != null)
         {
             long now = System.DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            bool isRecent = entry != null && (now - entry.Created) < 3600;
+            bool isRecent = !isDraft && entry != null && (now - entry.Created) < 3600;
             bool isUnread = entry != null && !HasReadStory(entry.ID);
             recentIndicator.SetActive(isRecent && isUnread);
         }
 
-        IsFriendEntry = entry != null && FriendsManager.IsFriend(entry.User);
+        IsFriendEntry = !isDraft && entry != null && FriendsManager.IsFriend(entry.User);
 
         if (friendIndicator != null)
             friendIndicator.SetActive(IsFriendEntry);

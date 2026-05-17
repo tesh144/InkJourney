@@ -299,6 +299,7 @@
   <div class="tab" onclick="showTab('journeys')">Journeys</div>
   <div class="tab" onclick="showTab('config')">Config</div>
   <div class="tab" onclick="showTab('support')">Support <span id="support-badge" style="display:none;background:var(--danger);color:#fff;border-radius:20px;padding:1px 7px;font-size:11px;margin-left:4px;font-weight:700;"></span></div>
+  <div class="tab" onclick="showTab('tools')">Tools</div>
 </div>
 
 <!-- ══════════════════════════════════════════ WRITE ══ -->
@@ -829,6 +830,19 @@
   </div>
 </div>
 
+<!-- ══════════════════════════════════════════ TOOLS ══ -->
+<div class="page" id="page-tools">
+  <div class="section-title">Compress Existing Photos</div>
+  <p style="font-size:13px;color:var(--muted);margin-bottom:20px">Scans all photos in Firebase Storage, recompresses any over 300 KB to JPEG at 85% quality and max 1920px wide, and re-uploads in place. User-uploaded photos are already compressed; this cleans up anything uploaded via admin before compression was added.</p>
+
+  <div style="display:flex;gap:12px;align-items:center;margin-bottom:20px">
+    <button class="btn btn-primary" id="compress-start-btn" onclick="startBulkCompress()">Scan &amp; Compress</button>
+    <span id="compress-status" style="font-size:13px;color:var(--muted)"></span>
+  </div>
+
+  <div id="compress-log" style="font-size:12px;font-family:monospace;color:var(--muted);line-height:1.8;max-height:400px;overflow-y:auto;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;display:none"></div>
+</div>
+
 <!-- Toast -->
 <div class="toast" id="toast"></div>
 
@@ -1133,7 +1147,8 @@ async function selectUnsplashPhoto(regularUrl, downloadLocation, encodedCredit) 
     progressWrap.style.display = 'block';
     progressBar.style.width = '0%';
 
-    const task = ref.put(blob, { contentType: 'image/jpeg' });
+    const compressed = await compressImage(blob);
+    const task = ref.put(compressed, { contentType: 'image/jpeg' });
     task.on('state_changed',
       snap => { progressBar.style.width = (snap.bytesTransferred / snap.totalBytes * 100) + '%'; }
     );
@@ -1158,6 +1173,27 @@ async function selectUnsplashPhoto(regularUrl, downloadLocation, encodedCredit) 
 document.getElementById('photo-picker-modal').addEventListener('click', e => {
   if (e.target === document.getElementById('photo-picker-modal')) closePhotoPicker();
 });
+
+// ════════════════════════════════════════════════════════════
+//  Photo compression helper
+// ════════════════════════════════════════════════════════════
+function compressImage(blob, maxWidth = 1920, quality = 0.85) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob);
+    const img  = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      let w = img.width, h = img.height;
+      if (w > maxWidth) { h = Math.round(h * maxWidth / w); w = maxWidth; }
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      canvas.toBlob(b => b ? resolve(b) : reject(new Error('Canvas toBlob failed')), 'image/jpeg', quality);
+    };
+    img.onerror = reject;
+    img.src = url;
+  });
+}
 
 // ════════════════════════════════════════════════════════════
 //  Photo handling
@@ -1191,8 +1227,9 @@ async function uploadPhoto(ctx, entryId) {
   const progressBar  = document.getElementById(c + '-upload-progress-bar');
   progressWrap.style.display = 'block';
 
-  const ref = storage.ref(`photos/${entryId}.jpg`);
-  const task = ref.put(file);
+  const compressed = await compressImage(file);
+  const ref  = storage.ref(`photos/${entryId}.jpg`);
+  const task = ref.put(compressed, { contentType: 'image/jpeg' });
 
   return new Promise((resolve, reject) => {
     task.on('state_changed',
@@ -2752,6 +2789,79 @@ function saveLifetimeConfig() {
     document.getElementById('cfg-status').textContent = 'Saved ✓';
     showToast('Story lifetime config saved');
   }).catch(e => showToast('Save failed: ' + e.message, 'error'));
+}
+
+// ════════════════════════════════════════════════════════════
+//  Bulk photo compression
+// ════════════════════════════════════════════════════════════
+async function startBulkCompress() {
+  const btn    = document.getElementById('compress-start-btn');
+  const status = document.getElementById('compress-status');
+  const log    = document.getElementById('compress-log');
+
+  btn.disabled = true;
+  log.style.display = 'block';
+  log.innerHTML = '';
+
+  function logLine(msg, colour) {
+    const line = document.createElement('div');
+    line.style.color = colour || 'var(--muted)';
+    line.textContent = msg;
+    log.appendChild(line);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  const THRESHOLD = 300 * 1024; // 300 KB — skip anything already small enough
+  let scanned = 0, compressed = 0, skipped = 0, errors = 0;
+
+  try {
+    logLine('Listing photos/ …');
+    const listResult = await storage.ref('photos').listAll();
+    const items = listResult.items;
+    logLine(`Found ${items.length} files.`);
+    status.textContent = `0 / ${items.length}`;
+
+    for (const itemRef of items) {
+      scanned++;
+      status.textContent = `${scanned} / ${items.length}`;
+      try {
+        const meta = await itemRef.getMetadata();
+        const size = meta.size;
+
+        if (size <= THRESHOLD) {
+          logLine(`  ✓ skip  ${itemRef.name}  (${(size/1024).toFixed(0)} KB)`);
+          skipped++;
+          continue;
+        }
+
+        logLine(`  ↓ fetch ${itemRef.name}  (${(size/1024).toFixed(0)} KB) …`);
+        const url  = await itemRef.getDownloadURL();
+        const res  = await fetch(url);
+        const blob = await res.blob();
+
+        const compBlob = await compressImage(blob);
+        logLine(`    → ${(compBlob.size/1024).toFixed(0)} KB after compress — uploading …`);
+
+        await itemRef.put(compBlob, { contentType: 'image/jpeg' });
+        logLine(`    ✔ done  ${itemRef.name}`, 'var(--accent)');
+        compressed++;
+      } catch (err) {
+        logLine(`  ✗ error ${itemRef.name}: ${err.message}`, 'var(--danger)');
+        errors++;
+      }
+    }
+
+    const summary = `Done. ${compressed} compressed, ${skipped} skipped, ${errors} errors.`;
+    logLine('');
+    logLine(summary, compressed > 0 ? 'var(--accent)' : 'var(--muted)');
+    status.textContent = summary;
+    showToast(summary, errors ? 'error' : 'success');
+  } catch (err) {
+    logLine('Failed to list storage: ' + err.message, 'var(--danger)');
+    showToast('Scan failed: ' + err.message, 'error');
+  }
+
+  btn.disabled = false;
 }
 </script>
 </body>

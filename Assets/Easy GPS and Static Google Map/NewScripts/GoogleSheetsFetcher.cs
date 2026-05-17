@@ -56,10 +56,14 @@ public class GoogleSheetsFetcher : MonoBehaviour
         public string PhotoUrl;
         public int StickerID;
         public int FontID;
+        public float StickerX     = 0.5f;
+        public float StickerY     = 0.5f;
+        public float StickerScale = 1.0f;
         public List<string> Tags = new List<string>();
         public List<Comment> Comments = new List<Comment>();
         public MapPointer pointer;
         public string cachedLocation;
+        public bool IsLocalDraft;
     }
 
     public List<Entry> landmarksList = new List<Entry>();
@@ -204,6 +208,9 @@ public class GoogleSheetsFetcher : MonoBehaviour
 
             Debug.Log($"[Firebase] Finished fetching {collectionName}. Count={targetList.Count}");
 
+            if (collectionName == "Stories")
+                MergeLocalOwnedStories();
+
             RebuildGridCells();
 
             if (collectionName == "Stories")
@@ -249,6 +256,9 @@ public class GoogleSheetsFetcher : MonoBehaviour
             PhotoUrl = GetString(data, "PhotoUrl"),
             StickerID = GetInt(data, "StickerID"),
             FontID = GetInt(data, "FontID"),
+            StickerX     = GetFloat(data, "StickerX",     0.5f),
+            StickerY     = GetFloat(data, "StickerY",     0.5f),
+            StickerScale = GetFloat(data, "StickerScale", 1.0f),
             Tags = GetTags(data, "Tags"),
             Comments = GetComments(data, "Comments"),
             Views = GetInt(data, "Views"),
@@ -374,12 +384,21 @@ public class GoogleSheetsFetcher : MonoBehaviour
         newEntry.pointer = mapPointer;
         instancedPointers.Add(mapPointer);
         storiesList.Add(newEntry);
+
+        Vector2Int newCell = GetGridCellIndex(newEntry.Latitude, newEntry.Longitude);
+        if (!gridCells.ContainsKey(newCell))
+            gridCells[newCell] = new List<Entry>();
+        gridCells[newCell].Add(newEntry);
+
         LocalStoryStore.SaveOwned(newEntry);
         mapPointer?.onPosted?.Invoke();
 
-        string collection = IsLandmark(newEntry) ? "Landmarks" : "Stories";
+        if (!newEntry.IsLocalDraft)
+        {
+            string collection = IsLandmark(newEntry) ? "Landmarks" : "Stories";
+            AddEntryToFirestore(newEntry, collection);
+        }
 
-        AddEntryToFirestore(newEntry, collection);
         LibraryManager.instance?.PopulateList();
         RefreshWriteButton();
     }
@@ -405,6 +424,9 @@ public class GoogleSheetsFetcher : MonoBehaviour
             { "Font", entry.Font ?? "" },
             { "FontID", entry.FontID },
             { "StickerID", entry.StickerID },
+            { "StickerX",     entry.StickerX },
+            { "StickerY",     entry.StickerY },
+            { "StickerScale", entry.StickerScale },
             { "Saves", entry.Saves },
             { "SavedByUserIds", entry.SavedByUserIds ?? new List<string>() },
             { "LikesCount", entry.LikesCount },
@@ -426,20 +448,28 @@ public class GoogleSheetsFetcher : MonoBehaviour
 
     public void DeleteEntryFromFirestore(Entry entry, string collectionName = "Stories")
     {
-        if (!firebaseReady)
+        if (entry.IsLocalDraft)
         {
-            Debug.LogError("[Firebase] Not ready — cannot delete entry.");
-            return;
+            // Never posted — no Firestore document exists; only clean up locally
+            PhotoUploadQueue.Dequeue(entry.ID);
         }
-
-        db.Collection(collectionName).Document(entry.ID).DeleteAsync().ContinueWithOnMainThread(task =>
+        else
         {
-            if (task.IsFaulted || task.IsCanceled)
-                Debug.LogError($"[Firebase] Failed to delete '{entry.Title}': {task.Exception}");
-        });
+            if (!firebaseReady)
+            {
+                Debug.LogError("[Firebase] Not ready — cannot delete entry.");
+                return;
+            }
 
-        if (!string.IsNullOrEmpty(entry.PhotoUrl))
-            DeletePhotoFromStorage(entry.ID);
+            db.Collection(collectionName).Document(entry.ID).DeleteAsync().ContinueWithOnMainThread(task =>
+            {
+                if (task.IsFaulted || task.IsCanceled)
+                    Debug.LogError($"[Firebase] Failed to delete '{entry.Title}': {task.Exception}");
+            });
+
+            if (!string.IsNullOrEmpty(entry.PhotoUrl))
+                DeletePhotoFromStorage(entry.ID);
+        }
 
         storiesList.Remove(entry);
         LocalStoryStore.RemoveOwned(entry.ID);
@@ -447,14 +477,14 @@ public class GoogleSheetsFetcher : MonoBehaviour
         if (entry.pointer != null)
         {
             instancedPointers.Remove(entry.pointer);
-            Destroy(entry.pointer.gameObject);
+            if (entry.pointer.gameObject != null)
+                Destroy(entry.pointer.gameObject);
             entry.pointer = null;
         }
 
         Vector2Int cell = GetGridCellIndex(entry.Latitude, entry.Longitude);
-
-        if (gridCells.ContainsKey(cell))
-            gridCells[cell].Remove(entry);
+        if (gridCells.TryGetValue(cell, out var cellList))
+            cellList.Remove(entry);
     }
 
     public void DeletePhotoFromStorage(string entryId)
@@ -467,6 +497,30 @@ public class GoogleSheetsFetcher : MonoBehaviour
                 if (task.IsFaulted)
                     Debug.LogWarning($"[Photo] Failed to delete photo for {entryId}: {task.Exception?.InnerException?.Message}");
             });
+    }
+
+    private void MergeLocalOwnedStories()
+    {
+        var owned = LocalStoryStore.LoadOwned();
+        foreach (var stored in owned)
+        {
+            var local = LocalStoryStore.ToLiveEntry(stored);
+            int serverIdx = storiesList.FindIndex(e => e.ID == local.ID);
+            if (serverIdx >= 0)
+            {
+                // Local data wins — keep the live pointer from the server entry
+                local.pointer      = storiesList[serverIdx].pointer;
+                local.IsLocalDraft = false; // It exists on the server
+                storiesList[serverIdx] = local;
+                local.pointer?.BindEntry(local);
+                UpdateEntryInFirestore(local);
+            }
+            else if (local.IsLocalDraft)
+            {
+                // Not on server yet — add as local-only draft
+                storiesList.Add(local);
+            }
+        }
     }
 
     private void DeduplicateStories()
@@ -582,6 +636,9 @@ public class GoogleSheetsFetcher : MonoBehaviour
                 continue;
             }
 
+            if (stored.IsLocalDraft)
+                continue; // Keep bytes; upload only when draft is published
+
             byte[] bytes = PhotoUploadQueue.GetBytes(storyId);
 
             if (bytes == null || bytes.Length == 0)
@@ -641,6 +698,9 @@ public class GoogleSheetsFetcher : MonoBehaviour
             { "Font", entry.Font ?? "" },
             { "FontID", entry.FontID },
             { "StickerID", entry.StickerID },
+            { "StickerX",     entry.StickerX },
+            { "StickerY",     entry.StickerY },
+            { "StickerScale", entry.StickerScale },
             { "Saves", entry.Saves },
             { "SavedByUserIds", entry.SavedByUserIds ?? new List<string>() },
             { "LikesCount", entry.LikesCount },
@@ -972,32 +1032,59 @@ public class GoogleSheetsFetcher : MonoBehaviour
         if (cluster == null || cluster.Count == 0)
             return new List<Entry>();
 
-        var ownedEntries = new List<Entry>();
+        Entry winner = PickClusterWinner(cluster);
+        return winner != null ? new List<Entry> { winner } : new List<Entry>();
+    }
 
-        foreach (Entry entry in cluster)
-        {
-            if (UserProfileManager.instance != null && UserProfileManager.instance.IsCurrentUser(entry.User))
-                ownedEntries.Add(entry);
-        }
-
-        if (ownedEntries.Count > 0)
-            return ownedEntries;
+    private Entry PickClusterWinner(List<Entry> cluster)
+    {
+        long now = System.DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        const long newThresholdSeconds = 86400 * 3; // 3 days = "new"
 
         Entry best = null;
-        int bestScore = -1;
 
-        foreach (Entry entry in cluster)
+        foreach (Entry candidate in cluster)
         {
-            int score = GetInterestMatchCount(entry);
+            if (candidate == null)
+                continue;
 
-            if (best == null || score > bestScore || (score == bestScore && entry.Created > best.Created))
-            {
-                best = entry;
-                bestScore = score;
-            }
+            if (best == null || CompareClusterEntries(candidate, best, now, newThresholdSeconds) < 0)
+                best = candidate;
         }
 
-        return best != null ? new List<Entry> { best } : new List<Entry>();
+        return best;
+    }
+
+    private int CompareClusterEntries(Entry a, Entry b, long now, long newThreshold)
+    {
+        // 1. User's own story wins
+        bool aOwned = UserProfileManager.instance != null && UserProfileManager.instance.IsCurrentUser(a.User);
+        bool bOwned = UserProfileManager.instance != null && UserProfileManager.instance.IsCurrentUser(b.User);
+        if (aOwned != bOwned) return aOwned ? -1 : 1;
+
+        // 2. Friend's story next
+        bool aFriend = FriendsManager.IsFriend(a.User);
+        bool bFriend = FriendsManager.IsFriend(b.User);
+        if (aFriend != bFriend) return aFriend ? -1 : 1;
+
+        // 3. Newer story (within newThreshold) wins
+        bool aNew = (now - a.Created) < newThreshold;
+        bool bNew = (now - b.Created) < newThreshold;
+        if (aNew != bNew) return aNew ? -1 : 1;
+        if (aNew && bNew && a.Created != b.Created) return b.Created.CompareTo(a.Created); // newest first
+
+        // 4. Most engagement (likes + views)
+        int aEngagement = a.LikesCount + a.Views;
+        int bEngagement = b.LikesCount + b.Views;
+        if (aEngagement != bEngagement) return bEngagement.CompareTo(aEngagement);
+
+        // 5. Soonest to expire (urgency)
+        long aExpire = a.Expire > 0 ? a.Expire : long.MaxValue;
+        long bExpire = b.Expire > 0 ? b.Expire : long.MaxValue;
+        if (aExpire != bExpire) return aExpire.CompareTo(bExpire);
+
+        // 6. Stable arbitrary tiebreak via ID hash
+        return (a.ID?.GetHashCode() ?? 0).CompareTo(b.ID?.GetHashCode() ?? 0);
     }
 
     private int GetInterestMatchCount(Entry entry)
@@ -1454,8 +1541,8 @@ public class GoogleSheetsFetcher : MonoBehaviour
         return result;
     }
 
-    private float GetFloat(Dictionary<string, object> d, string key) =>
-        d.TryGetValue(key, out object v) && float.TryParse(v?.ToString(), out float r) ? r : 0f;
+    private float GetFloat(Dictionary<string, object> d, string key, float fallback = 0f) =>
+        d.TryGetValue(key, out object v) && float.TryParse(v?.ToString(), out float r) ? r : fallback;
 
     private int GetInt(Dictionary<string, object> d, string key) =>
         d.TryGetValue(key, out object v) && int.TryParse(v?.ToString(), out int r) ? r : 0;

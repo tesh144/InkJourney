@@ -629,7 +629,7 @@ public class UserProfileManager : MonoBehaviour
         usernameInputField.text = HasUsername ? Username : string.Empty;
 
         if (usernamePlaceholder != null)
-            usernamePlaceholder.text = HasUsername ? Username : "Enter Name";
+            usernamePlaceholder.text = HasUsername ? Username : "Enter Username";
 
         usernameInputField.onEndEdit.AddListener(OnUsernameInputEndEdit);
         UpdateProfileDoneButton();

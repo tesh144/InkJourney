@@ -32,12 +32,31 @@ public class StoryPhotoManager : MonoBehaviour
     public event System.Action onPhotoChanged;
 
     public Texture2D CapturedPhoto { get; private set; }
+    public Texture2D ActivePhotoTexture => CapturedPhoto ?? _existingPhotoTexture;
 
     private Texture2D _existingPhotoTexture;
+    private bool _existingPhotoOwned;
     private WebCamTexture webCamTexture;
     private bool usingFrontCamera = false;
     private bool _flashOn = false;
     private Coroutine _focusIndicatorRoutine;
+
+    // Cached shader property IDs — avoids string hashing every frame
+    private static readonly int PropRotationSteps = Shader.PropertyToID("_RotationSteps");
+    private static readonly int PropMirrorX       = Shader.PropertyToID("_MirrorX");
+    private static readonly int PropMirrorY       = Shader.PropertyToID("_MirrorY");
+    private static readonly int PropDisplayAspect = Shader.PropertyToID("_DisplayAspect");
+    private static readonly int PropTextureAspect = Shader.PropertyToID("_TextureAspect");
+
+    private int   _currentRotationSteps = 0;
+    private float _rawTextureAspect     = 1f;
+
+    // Tracks last-applied material values so we only call SetFloat when something changes
+    private int   _matRotationSteps  = -1;
+    private float _matMirrorX        = -1f;
+    private float _matMirrorY        = -1f;
+    private float _matDisplayAspect  = -1f;
+    private float _matTextureAspect  = -1f;
 
     private void Awake()
     {
@@ -52,6 +71,17 @@ public class StoryPhotoManager : MonoBehaviour
     public void LoadExistingPhoto(string url)
     {
         if (string.IsNullOrEmpty(url)) return;
+
+        var cached = PhotoAsset.GetCached(url);
+        if (cached != null)
+        {
+            if (_existingPhotoTexture != null && _existingPhotoOwned) Destroy(_existingPhotoTexture);
+            _existingPhotoTexture = cached;
+            _existingPhotoOwned   = false;
+            ShowPreview(_existingPhotoTexture);
+            return;
+        }
+
         StartCoroutine(LoadExistingPhotoRoutine(url));
     }
 
@@ -62,8 +92,9 @@ public class StoryPhotoManager : MonoBehaviour
             yield return req.SendWebRequest();
             if (req.result != UnityEngine.Networking.UnityWebRequest.Result.Success) yield break;
 
-            if (_existingPhotoTexture != null) Destroy(_existingPhotoTexture);
+            if (_existingPhotoTexture != null && _existingPhotoOwned) Destroy(_existingPhotoTexture);
             _existingPhotoTexture = ((UnityEngine.Networking.DownloadHandlerTexture)req.downloadHandler).texture;
+            _existingPhotoOwned   = true;
             ShowPreview(_existingPhotoTexture);
         }
     }
@@ -98,11 +129,11 @@ public class StoryPhotoManager : MonoBehaviour
 
     private void LateUpdate()
     {
-        if (webCamTexture != null && webCamTexture.isPlaying)
-        {
+        if (webCamTexture == null || !webCamTexture.isPlaying) return;
+        HandleFocusTap();
+        // Only recalculate material when the camera has delivered a new frame
+        if (webCamTexture.didUpdateThisFrame)
             UpdateCameraFeedMaterial();
-            HandleFocusTap();
-        }
     }
 
     private void HandleFocusTap()
@@ -192,11 +223,16 @@ public class StoryPhotoManager : MonoBehaviour
         float mirrorX = 1f;
         float mirrorY = usingFrontCamera ? 1f : 0f;
 
-        cameraFeed.material.SetFloat("_RotationSteps", rotationSteps);
-        cameraFeed.material.SetFloat("_MirrorX", mirrorX);
-        cameraFeed.material.SetFloat("_MirrorY", mirrorY);
-        cameraFeed.material.SetFloat("_DisplayAspect", shaderDispAspect);
-        cameraFeed.material.SetFloat("_TextureAspect", shaderTexAspect);
+        // Only push to GPU when values have actually changed
+        var mat = cameraFeed.material;
+        if (rotationSteps  != _matRotationSteps)  { mat.SetFloat(PropRotationSteps, rotationSteps);   _matRotationSteps  = rotationSteps; }
+        if (mirrorX        != _matMirrorX)        { mat.SetFloat(PropMirrorX,       mirrorX);         _matMirrorX        = mirrorX; }
+        if (mirrorY        != _matMirrorY)        { mat.SetFloat(PropMirrorY,       mirrorY);         _matMirrorY        = mirrorY; }
+        if (!Mathf.Approximately(shaderDispAspect, _matDisplayAspect)) { mat.SetFloat(PropDisplayAspect, shaderDispAspect); _matDisplayAspect = shaderDispAspect; }
+        if (!Mathf.Approximately(shaderTexAspect,  _matTextureAspect)) { mat.SetFloat(PropTextureAspect,  shaderTexAspect);  _matTextureAspect  = shaderTexAspect; }
+
+        _currentRotationSteps = rotationSteps;
+        _rawTextureAspect     = rawTextureAspect;
     }
 
     private void StartCamera(bool preferFront)
@@ -229,7 +265,7 @@ public class StoryPhotoManager : MonoBehaviour
         if (zoom20Button != null) zoom20Button.SetActive(maxZoom >= 2f);
         SetZoom(1f);
 
-        webCamTexture = new WebCamTexture(deviceName, 1280, 720);
+        webCamTexture = new WebCamTexture(deviceName, 960, 540);
         cameraFeed.texture = webCamTexture;
         webCamTexture.Play();
         StartCoroutine(ApplyOrientationWhenReady());
@@ -272,26 +308,43 @@ public class StoryPhotoManager : MonoBehaviour
             yield return new WaitForSeconds(0.4f);
         }
 
-        Texture2D raw = new Texture2D(webCamTexture.width, webCamTexture.height);
-        raw.SetPixels(webCamTexture.GetPixels());
-        raw.Apply();
+        // GPU blit: reuse the camera shader (already has correct rotation/mirror values)
+        // but override the display aspect to exactly 2:1 so the crop lands correctly.
+        int outW = webCamTexture.width;
+        int outH = outW / 2;
+        var rt = RenderTexture.GetTemporary(outW, outH, 0, RenderTextureFormat.ARGB32);
+
+        var capMat = new Material(cameraFeed.material);
+        float captureDispAspect, captureTexAspect;
+        if (_currentRotationSteps == 1 || _currentRotationSteps == 3)
+        {
+            captureTexAspect  = 2f;
+            captureDispAspect = 1f / _rawTextureAspect;
+        }
+        else
+        {
+            captureTexAspect  = _rawTextureAspect;
+            captureDispAspect = 2f;
+        }
+        capMat.SetFloat(PropDisplayAspect, captureDispAspect);
+        capMat.SetFloat(PropTextureAspect, captureTexAspect);
+
+        Graphics.Blit(webCamTexture, rt, capMat);
+        Destroy(capMat);
+
+        CapturedPhoto = new Texture2D(outW, outH, TextureFormat.RGBA32, false);
+        var prevRT = RenderTexture.active;
+        RenderTexture.active = rt;
+        CapturedPhoto.ReadPixels(new Rect(0, 0, outW, outH), 0, 0);
+        CapturedPhoto.Apply();
+        RenderTexture.active = prevRT;
+        RenderTexture.ReleaseTemporary(rt);
 
         if (_flashOn)
         {
             yield return new WaitForSeconds(0.2f);
             NativeCameraFlash.SetTorch(false);
         }
-
-        Texture2D oriented = ApplyOrientation(raw, webCamTexture.videoRotationAngle, usingFrontCamera);
-        oriented = FlipHorizontal(oriented);
-
-        // Crop to match what the live feed shows — use the feed rect ratio only.
-        float feedW = cameraFeed.rectTransform.rect.width;
-        float feedH = cameraFeed.rectTransform.rect.height;
-        float displayRatio = feedW / feedH;
-
-        CapturedPhoto = CropToAspect(oriented, displayRatio);
-        if (CapturedPhoto != oriented) Destroy(oriented);
 
         CloseCamera();
         ShowPreview(CapturedPhoto);
@@ -399,8 +452,29 @@ public class StoryPhotoManager : MonoBehaviour
     {
         SetFlash(false);
         NativeCameraFlash.SetTorch(false);
-        webCamTexture?.Stop();
-        cameraPanel.SetActive(false);
+        if (webCamTexture != null)
+        {
+            webCamTexture.Stop();
+            Destroy(webCamTexture);
+            webCamTexture = null;
+        }
+        // Reset cached material state so it's recalculated fresh next time
+        _matRotationSteps = -1;
+        if (cameraPanel != null) cameraPanel.SetActive(false);
+    }
+
+    private void OnApplicationPause(bool paused)
+    {
+        if (paused)
+        {
+            if (webCamTexture != null && webCamTexture.isPlaying)
+                webCamTexture.Pause();
+            NativeCameraFlash.SetTorch(false);
+        }
+        else if (webCamTexture != null && !webCamTexture.isPlaying && cameraPanel != null && cameraPanel.activeSelf)
+        {
+            webCamTexture.Play();
+        }
     }
 
     // Assign to: Delete button OnClick
@@ -419,17 +493,58 @@ public class StoryPhotoManager : MonoBehaviour
     {
         CloseCamera();
         if (CapturedPhoto != null) Destroy(CapturedPhoto);
-        if (_existingPhotoTexture != null) { Destroy(_existingPhotoTexture); _existingPhotoTexture = null; }
+        if (_existingPhotoTexture != null && _existingPhotoOwned) Destroy(_existingPhotoTexture);
+        _existingPhotoTexture = null;
+        _existingPhotoOwned   = false;
         DeletePhoto();
     }
 
     private void ShowPreview(Texture2D photo)
     {
-        photoPreview.texture = photo;
         photoPreview.gameObject.SetActive(true);
+        ApplyPhotoToRawImage(photo, photoPreview);
         editDeleteButtons.SetActive(true);
         SetPlaceholderVisible(false);
         onPhotoChanged?.Invoke();
+    }
+
+    // Single canonical method for displaying a photo — use this everywhere.
+    // If the RawImage has an AspectRatioFitter, it will auto-size to the texture with zero crop.
+    // Otherwise it center-fills the container with minimal crop.
+    public static void ApplyPhotoToRawImage(Texture2D tex, RawImage img)
+    {
+        if (img == null || tex == null) return;
+        img.texture = tex;
+        img.color   = Color.white;
+        var fitter = img.GetComponent<AspectRatioFitter>();
+        if (fitter != null)
+        {
+            fitter.aspectRatio = (float)tex.width / tex.height;
+            img.uvRect = new Rect(0f, 0f, 1f, 1f);
+        }
+        else
+        {
+            img.uvRect = CenterFillRect(tex, img.rectTransform);
+        }
+    }
+
+    // Center-fill crop: use when you need the Rect value separately.
+    public static Rect CenterFillRect(Texture2D tex, RectTransform container)
+    {
+        if (tex == null) return new Rect(0f, 0f, 1f, 1f);
+        Rect r = container.rect;
+        float containerAspect = (r.width > 1f && r.height > 1f) ? r.width / r.height : 2f;
+        float texAspect = (float)tex.width / tex.height;
+        if (texAspect > containerAspect)
+        {
+            float u = containerAspect / texAspect;
+            return new Rect((1f - u) * 0.5f, 0f, u, 1f);
+        }
+        else
+        {
+            float v = texAspect / containerAspect;
+            return new Rect(0f, (1f - v) * 0.5f, 1f, v);
+        }
     }
 
     private void SetPlaceholderVisible(bool visible)
@@ -440,6 +555,11 @@ public class StoryPhotoManager : MonoBehaviour
 
     private void OnDestroy()
     {
-        webCamTexture?.Stop();
+        if (webCamTexture != null)
+        {
+            webCamTexture.Stop();
+            Destroy(webCamTexture);
+            webCamTexture = null;
+        }
     }
 }

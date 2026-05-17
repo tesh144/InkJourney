@@ -190,7 +190,12 @@ public class InspirationPanel : MonoBehaviour
     private int    _promptInsertIndex = -1;
     private string _promptColorHex;
 
+    public static InspirationPanel instance;
+    public int PromptInsertIndex => _promptInsertIndex;
+
     // ── Lifecycle ──────────────────────────────────────────────────────────
+
+    private void Awake() { instance = this; }
 
     private void OnEnable()
     {

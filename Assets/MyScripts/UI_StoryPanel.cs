@@ -39,6 +39,7 @@ public class UI_StoryPanel : MonoBehaviour
 
     public GameObject photoContainer;
     public RawImage photoImage;
+    public RectTransform stickerRect;
     public Image profilePic;
     public Image backdrop;
     public Image cover;
@@ -49,14 +50,22 @@ public class UI_StoryPanel : MonoBehaviour
     public StoryCommentsPanel commentsPanel;
 
     private string pendingProfilePicAuthorId;
+    private int _photoLoadGen;
 
     [HideInInspector] public string currentStoryId;
     public GoogleSheetsFetcher.Entry BoundEntry { get; private set; }
 
     private static readonly HashSet<string> HiddenTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
-        "public", "private", "friends_only"
+        "public", "private", "friends_only", "draft"
     };
+
+    [Header("Expiry Display")]
+    public string draftLabel    = "Draft";
+    public string expiredLabel  = "Expired";
+
+    public GameObject editButton;
+    public GameObject deleteButton;
 
     private void Awake()
     {
@@ -83,29 +92,85 @@ public class UI_StoryPanel : MonoBehaviour
         if (string.IsNullOrEmpty(photoUrl) && storyId != null && PhotoUploadQueue.HasPending(storyId))
             photoUrl = "file://" + PhotoUploadQueue.FilePath(storyId);
 
-        bool hasPhoto = !string.IsNullOrEmpty(photoUrl);
+        int gen = ++_photoLoadGen;
+        if (photoImage != null) { photoImage.texture = null; photoImage.color = new Color(0.1f, 0.1f, 0.1f, 1f); }
 
-        if (photoContainer != null)
-            photoContainer.SetActive(hasPhoto);
+        if (!string.IsNullOrEmpty(photoUrl))
+        {
+            if (photoContainer != null) photoContainer.SetActive(true);
+            if (photoImage != null && MapLoader.instance != null)
+                MapLoader.instance.StartCoroutine(LoadPhotoWithFallback(photoUrl, gen));
+            return;
+        }
 
-        if (hasPhoto && photoImage != null && MapLoader.instance != null)
-            MapLoader.instance.StartCoroutine(PhotoAsset.LoadForStory(photoUrl, photoImage));
+        if (photoContainer != null) photoContainer.SetActive(true);
+        TryLoadMapFallback(gen);
     }
 
-    private IEnumerator LoadPhotoFromUrl(string url)
+    private IEnumerator LoadPhotoWithFallback(string url, int gen)
     {
-        yield return PhotoAsset.LoadForStory(url, photoImage);
+        Texture2D loaded = null;
+        yield return PhotoAsset.FetchTexture(url, tex => loaded = tex);
+        if (gen != _photoLoadGen || photoImage == null) yield break;
+        if (loaded == null) { TryLoadMapFallback(gen); yield break; }
+        StoryPhotoManager.ApplyPhotoToRawImage(loaded, photoImage);
+    }
+
+    private void TryLoadMapFallback(int gen)
+    {
+        if (photoImage == null || photoImage.texture != null) return;
+        var entry = BoundEntry;
+        if (entry == null || (entry.Latitude == 0 && entry.Longitude == 0)) return;
+        if (MapLoader.instance == null) return;
+        photoImage.color = new Color(0.1f, 0.1f, 0.1f, 1f);
+        MapLoader.instance.StartCoroutine(LoadMapFallback(entry, gen));
+    }
+
+    public static string MapPinColor(GoogleSheetsFetcher.Entry entry)
+    {
+        if (entry == null) return "3bb3d0";
+        if (GoogleSheetsFetcher.IsLandmark(entry)) return "9b59b6";
+        if (GoogleSheetsFetcher.instance?.journeysList != null)
+            foreach (var j in GoogleSheetsFetcher.instance.journeysList)
+                if (j?.Chapters?.Exists(c => c.StoryId == entry.ID) == true)
+                    return "b23333";
+        if (FriendsManager.IsFriend(entry.User)) return "ffd833";
+        return "3bb3d0";
+    }
+
+    private IEnumerator LoadMapFallback(GoogleSheetsFetcher.Entry entry, int gen)
+    {
+        string styleId = ResolveMapStyle(entry.Theme);
+        string token   = MapLoader.instance?.mapboxToken ?? "";
+        string pin     = MapPinColor(entry);
+        string url     = $"https://api.mapbox.com/styles/v1/{styleId}/static/pin-l+{pin}({entry.Longitude},{entry.Latitude})/{entry.Longitude},{entry.Latitude},12,0/640x360@2x?access_token={token}";
+
+        yield return MapboxImageCache.Fetch(url, tex =>
+        {
+            if (gen != _photoLoadGen || photoImage == null || tex == null) return;
+            StoryPhotoManager.ApplyPhotoToRawImage(tex, photoImage);
+        });
+    }
+
+    private static string ResolveMapStyle(string themeName)
+    {
+        if (!string.IsNullOrEmpty(themeName) && MapLoader.instance?.mapStyles != null)
+        {
+            foreach (var s in MapLoader.instance.mapStyles)
+                if (s.defaultTheme != null && s.defaultTheme.themeName == themeName)
+                    return s.styleString;
+        }
+        return !string.IsNullOrEmpty(MapLoader.instance?.mapStyle)
+            ? MapLoader.instance.mapStyle
+            : "mapbox/dark-v11";
     }
 
     public void SetPhoto(Texture2D texture)
     {
-        bool hasPhoto = texture != null;
-
-        if (photoContainer != null)
-            photoContainer.SetActive(hasPhoto);
-
-        if (hasPhoto && photoImage != null)
-            photoImage.texture = texture;
+        ++_photoLoadGen; // cancel any in-flight URL load
+        if (photoContainer != null) photoContainer.SetActive(true);
+        if (texture != null && photoImage != null)
+            StoryPhotoManager.ApplyPhotoToRawImage(texture, photoImage);
     }
 
     public void SetAuthor(string authorId, string authorName)
@@ -149,6 +214,69 @@ public class UI_StoryPanel : MonoBehaviour
             commentsPanel.SetCountDisplay(commentCountText);
             commentsPanel.BindStory(entry);
         }
+
+        bool isOwner = entry != null
+            && UserProfileManager.instance != null
+            && entry.User == UserProfileManager.instance.UserId;
+        bool isExpired = entry != null
+            && !entry.IsLocalDraft
+            && entry.Expire > 0
+            && entry.Expire < DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        if (editButton   != null) editButton.SetActive(isOwner && !isExpired);
+        if (deleteButton != null) deleteButton.SetActive(isOwner);
+
+        PositionSticker(entry);
+    }
+
+    public void PositionSticker(GoogleSheetsFetcher.Entry entry)
+    {
+        if (stickerRect == null) return;
+        var parent = stickerRect.parent as RectTransform;
+        if (parent == null) return;
+
+        float nx    = entry != null ? entry.StickerX     : 0.5f;
+        float ny    = entry != null ? entry.StickerY     : 0.5f;
+        float scale = entry != null ? entry.StickerScale : 1.0f;
+
+        stickerRect.anchoredPosition = new Vector2(
+            (nx - 0.5f) * parent.rect.width,
+            (ny - 0.5f) * parent.rect.height);
+        stickerRect.localScale = new Vector3(scale, scale, 1f);
+    }
+
+    public void SetExpireDisplay(GoogleSheetsFetcher.Entry entry)
+    {
+        if (expiresText == null) return;
+        if (entry == null) { expiresText.text = string.Empty; return; }
+
+        if (entry.IsLocalDraft || entry.Expire == 0)
+        {
+            expiresText.text = draftLabel;
+            return;
+        }
+
+        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        if (entry.Expire < now)
+        {
+            expiresText.text = expiredLabel;
+            return;
+        }
+
+        expiresText.text = StoryDateFormatter.FormatActive(entry.Expire);
+    }
+
+    public void EditBoundStory()
+    {
+        if (BoundEntry == null) return;
+        gameObject.SetActive(false);
+        CreateNewStory.instance.LoadForEdit(BoundEntry);
+    }
+
+    public void DeleteBoundStory()
+    {
+        if (BoundEntry == null) return;
+        gameObject.SetActive(false);
+        GoogleSheetsFetcher.instance.DeleteEntryFromFirestore(BoundEntry);
     }
 
     public void SetTags(IEnumerable<string> tagIds)
@@ -182,9 +310,9 @@ public class UI_StoryPanel : MonoBehaviour
                 continue;
 
             if (builder.Length > 0)
-                builder.Append('\n');
+                builder.Append(' ');
 
-            builder.Append('#').Append(display.Trim().Replace(" ", "_"));
+            builder.Append('#').Append(display.Trim());
         }
 
         tags.text = builder.ToString();

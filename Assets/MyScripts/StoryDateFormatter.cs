@@ -12,16 +12,16 @@ public static class StoryDateFormatter
         if (elapsed.TotalMinutes < 60)
         {
             int mins = Mathf.Max(1, Mathf.FloorToInt((float)elapsed.TotalMinutes));
-            return $"Posted:\n{mins}mins ago";
+            return $"Posted: {mins}mins ago";
         }
         if (elapsed.TotalHours < 24)
-            return $"Posted:\n{Mathf.FloorToInt((float)elapsed.TotalHours)}hrs ago";
+            return $"Posted: {Mathf.FloorToInt((float)elapsed.TotalHours)}hrs ago";
         if (elapsed.TotalDays < 30)
-            return $"Posted:\n{Mathf.FloorToInt((float)elapsed.TotalDays)}d ago";
+            return $"Posted: {Mathf.FloorToInt((float)elapsed.TotalDays)}d ago";
         if (elapsed.TotalDays < 365)
-            return $"Posted:\n{Mathf.FloorToInt((float)elapsed.TotalDays / 30)}mo ago";
+            return $"Posted: {Mathf.FloorToInt((float)elapsed.TotalDays / 30)}mo ago";
         int yrs = Mathf.FloorToInt((float)elapsed.TotalDays / 365);
-        return $"Posted:\n{yrs}yrs ago";
+        return $"Posted: {yrs}yrs ago";
     }
 
     public static string FormatActive(long expireTimestamp)

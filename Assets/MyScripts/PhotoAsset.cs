@@ -17,10 +17,49 @@ public class PhotoAsset : MonoBehaviour
     private float     _spawnTime;
     private static readonly int ShuffleTrigger = Animator.StringToHash("Shuffle");
 
-    private static readonly Dictionary<string, Texture2D> _thumbCache = new();
-    private static readonly Dictionary<string, Texture2D> _fullCache  = new();
+    private static readonly Dictionary<string, Texture2D>             _thumbCache = new();
+    private static readonly LinkedList<string>                        _lruOrder   = new();
+    private static readonly Dictionary<string, LinkedListNode<string>> _lruNodes  = new();
+    private const int CacheCapacity = 50;
 
-    private const int ThumbSize = 256;
+    private static Texture2D CacheGet(string url)
+    {
+        if (!_thumbCache.TryGetValue(url, out var tex)) return null;
+        // Move to front (most recently used)
+        _lruOrder.Remove(_lruNodes[url]);
+        _lruOrder.AddFirst(_lruNodes[url]);
+        return tex;
+    }
+
+    private static void CacheAdd(string url, Texture2D tex)
+    {
+        if (_thumbCache.ContainsKey(url))
+        {
+            _thumbCache[url] = tex;
+            _lruOrder.Remove(_lruNodes[url]);
+            _lruOrder.AddFirst(_lruNodes[url]);
+            return;
+        }
+
+        // Evict LRU tail if at capacity
+        if (_thumbCache.Count >= CacheCapacity)
+        {
+            var lruNode = _lruOrder.Last;
+            if (lruNode != null)
+            {
+                string lruUrl = lruNode.Value;
+                if (_thumbCache.TryGetValue(lruUrl, out var evicted))
+                    Object.Destroy(evicted);
+                _thumbCache.Remove(lruUrl);
+                _lruNodes.Remove(lruUrl);
+                _lruOrder.RemoveLast();
+            }
+        }
+
+        var node = _lruOrder.AddFirst(url);
+        _lruNodes[url]   = node;
+        _thumbCache[url] = tex;
+    }
 
     private void Awake()
     {
@@ -35,8 +74,7 @@ public class PhotoAsset : MonoBehaviour
         if (photo != null) photo.color = Color.clear;
     }
 
-    // fullRes = false for cards/shuffles, true for story panel
-    public void Initialise(string url, float rotMin, float rotMax, bool fullRes = false, float extraDelay = 0f)
+    public void Initialise(string url, float rotMin, float rotMax, float extraDelay = 0f)
     {
         _spawnTime += extraDelay;
 
@@ -44,57 +82,33 @@ public class PhotoAsset : MonoBehaviour
             rotatedTransform.localRotation = Quaternion.Euler(0f, 0f, Random.Range(rotMin, rotMax));
 
         if (!string.IsNullOrEmpty(url))
-            StartCoroutine(LoadTexture(url, fullRes));
+            StartCoroutine(LoadTexture(url));
     }
 
     public void PlayShuffle() => _animator?.SetTrigger(ShuffleTrigger);
 
-    private IEnumerator LoadTexture(string url, bool fullRes)
+    private IEnumerator LoadTexture(string url)
     {
-        // Apply cached thumb immediately so there's no blank frame
-        if (_thumbCache.TryGetValue(url, out var thumb))
-        {
-            Apply(thumb);
-            if (!fullRes) yield break;
-        }
-
-        // Full res already cached — upgrade straight away
-        if (_fullCache.TryGetValue(url, out var full))
-        {
-            Apply(full);
-            yield break;
-        }
+        var cached = CacheGet(url);
+        if (cached != null) { Apply(cached); yield break; }
 
         using var req = UnityWebRequestTexture.GetTexture(url);
         yield return req.SendWebRequest();
         if (req.result != UnityWebRequest.Result.Success || photo == null) yield break;
 
         var downloaded = DownloadHandlerTexture.GetContent(req);
-
-        if (fullRes)
-        {
-            _fullCache[url] = downloaded;
-            if (!_thumbCache.ContainsKey(url))
-                _thumbCache[url] = ScaleDown(downloaded, ThumbSize);
-            Apply(downloaded);
-        }
-        else
-        {
-            var t = ScaleDown(downloaded, ThumbSize);
-            Destroy(downloaded);
-            _thumbCache[url] = t;
-            Apply(t);
-        }
+        CacheAdd(url, downloaded);
+        Apply(downloaded);
     }
 
     private void Apply(Texture2D tex)
     {
         if (photo == null) return;
         photo.texture = tex;
+        photo.uvRect  = CenterCropSquare(tex);
 
         var fitter = photo.GetComponent<AspectRatioFitter>();
-        if (fitter != null && tex.width > 0 && tex.height > 0)
-            fitter.aspectRatio = (float)tex.width / tex.height;
+        if (fitter != null) fitter.aspectRatio = 1.25f;
 
         if (_fadeCoroutine != null) StopCoroutine(_fadeCoroutine);
         _fadeCoroutine = StartCoroutine(FadeIn());
@@ -120,43 +134,49 @@ public class PhotoAsset : MonoBehaviour
 
     // ── Static helpers ─────────────────────────────────────────────────────
 
-    // Pre-load a thumb into cache without spawning a card.
+    public static Texture2D GetCached(string url) =>
+        !string.IsNullOrEmpty(url) ? CacheGet(url) : null;
+
+    // Loads into cache and fires callback — does NOT auto-apply to any UI element.
+    public static IEnumerator FetchTexture(string url, System.Action<Texture2D> onDone)
+    {
+        if (string.IsNullOrEmpty(url)) { onDone?.Invoke(null); yield break; }
+        var cached = CacheGet(url);
+        if (cached != null) { onDone?.Invoke(cached); yield break; }
+        using var req = UnityWebRequestTexture.GetTexture(url);
+        yield return req.SendWebRequest();
+        if (req.result != UnityWebRequest.Result.Success) { onDone?.Invoke(null); yield break; }
+        var tex = DownloadHandlerTexture.GetContent(req);
+        CacheAdd(url, tex);
+        onDone?.Invoke(tex);
+    }
+
+    // Pre-load into cache without spawning a card.
     public static IEnumerator Prewarm(string url)
     {
-        if (string.IsNullOrEmpty(url) || _thumbCache.ContainsKey(url)) yield break;
+        if (string.IsNullOrEmpty(url) || CacheGet(url) != null) yield break;
 
         using var req = UnityWebRequestTexture.GetTexture(url);
         yield return req.SendWebRequest();
         if (req.result != UnityWebRequest.Result.Success) yield break;
 
-        var downloaded = DownloadHandlerTexture.GetContent(req);
-        _thumbCache[url] = ScaleDown(downloaded, ThumbSize);
-        Destroy(downloaded);
+        CacheAdd(url, DownloadHandlerTexture.GetContent(req));
     }
 
-    // For the story panel — shows cached thumb instantly, then swaps in full res.
+    // For the story panel — shows cached texture instantly if available.
     public static IEnumerator LoadForStory(string url, RawImage target)
     {
         if (target == null || string.IsNullOrEmpty(url)) yield break;
 
-        // Show cached thumb immediately while full res loads
-        if (_thumbCache.TryGetValue(url, out var thumb))
-            ApplyToTarget(target, thumb);
-
-        if (_fullCache.TryGetValue(url, out var full))
-        {
-            ApplyToTarget(target, full);
-            yield break;
-        }
+        var cached = CacheGet(url);
+        if (cached != null) { ApplyToTarget(target, cached); yield break; }
 
         using var req = UnityWebRequestTexture.GetTexture(url);
         yield return req.SendWebRequest();
         if (req.result != UnityWebRequest.Result.Success) yield break;
 
         var downloaded = DownloadHandlerTexture.GetContent(req);
-        _fullCache[url] = downloaded;
-        if (!_thumbCache.ContainsKey(url))
-            _thumbCache[url] = ScaleDown(downloaded, ThumbSize);
+        CacheAdd(url, downloaded);
 
         if (target != null) ApplyToTarget(target, downloaded);
     }
@@ -166,30 +186,27 @@ public class PhotoAsset : MonoBehaviour
         if (target == null || tex == null) return;
         target.texture = tex;
         target.color   = Color.white;
+        target.uvRect  = CenterCropSquare(tex);
 
         var fitter = target.GetComponent<AspectRatioFitter>();
-        if (fitter != null && tex.width > 0 && tex.height > 0)
-            fitter.aspectRatio = (float)tex.width / tex.height;
+        if (fitter != null) fitter.aspectRatio = 1.25f;
     }
 
-    // Creates a scaled-down copy. Does NOT destroy the source.
-    private static Texture2D ScaleDown(Texture2D src, int maxSize)
+    private static Rect CenterCropSquare(Texture2D tex)
     {
-        if (src.width <= maxSize && src.height <= maxSize) return src;
+        const float targetAspect = 1.25f;
+        float texAspect = (float)tex.width / tex.height;
 
-        float aspect = (float)src.width / src.height;
-        int w = src.width >= src.height ? maxSize : Mathf.RoundToInt(maxSize * aspect);
-        int h = src.height >= src.width ? maxSize : Mathf.RoundToInt(maxSize / aspect);
-
-        var rt   = RenderTexture.GetTemporary(w, h, 0, RenderTextureFormat.ARGB32);
-        Graphics.Blit(src, rt);
-        var prev = RenderTexture.active;
-        RenderTexture.active = rt;
-        var result = new Texture2D(w, h, TextureFormat.RGBA32, false);
-        result.ReadPixels(new Rect(0, 0, w, h), 0, 0);
-        result.Apply();
-        RenderTexture.active = prev;
-        RenderTexture.ReleaseTemporary(rt);
-        return result;
+        if (texAspect > targetAspect)
+        {
+            float u = targetAspect / texAspect;
+            return new Rect((1f - u) * 0.5f, 0f, u, 1f);
+        }
+        else
+        {
+            float v = texAspect / targetAspect;
+            return new Rect(0f, (1f - v) * 0.5f, 1f, v);
+        }
     }
+
 }

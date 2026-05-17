@@ -91,8 +91,7 @@ public class GoogleSheetManager : MonoBehaviour
         bool isLandmark = boundEntry != null && GoogleSheetsFetcher.IsLandmark(boundEntry);
         if (ObjectManager.instance.storyPanel.dateText != null)
             ObjectManager.instance.storyPanel.dateText.text = isLandmark ? "" : StoryDateFormatter.FormatAgo(resolvedCreated);
-        if (ObjectManager.instance.storyPanel.expiresText != null)
-            ObjectManager.instance.storyPanel.expiresText.text = StoryDateFormatter.FormatActive(resolvedExpire);
+        ObjectManager.instance.storyPanel.SetExpireDisplay(boundEntry);
 
         string resolvedLocation = (mapPointer != null && !string.IsNullOrEmpty(mapPointer.location))
             ? mapPointer.location

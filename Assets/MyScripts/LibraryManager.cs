@@ -469,8 +469,7 @@ public class LibraryManager : MonoBehaviour
         ObjectManager.instance.storyPanel.location_expire_text.text = storyLocation ?? "Unknown";
         if (storyLocation == null && (e.Latitude != 0 || e.Longitude != 0))
             StartCoroutine(FetchAndUpdateStoryPanelLocation(e));
-        if (ObjectManager.instance.storyPanel.expiresText != null)
-            ObjectManager.instance.storyPanel.expiresText.text = StoryDateFormatter.FormatActive(e.Expire);
+        ObjectManager.instance.storyPanel.SetExpireDisplay(e);
         if (ObjectManager.instance.storyPanel.dateText != null)
             ObjectManager.instance.storyPanel.dateText.text = isLandmarkEntry ? "Landmark" : StoryDateFormatter.FormatAgo(e.Created);
         ObjectManager.instance.storyPanel.SetTypeIcon(e, !string.IsNullOrEmpty(friendFilterUserId));
@@ -493,9 +492,9 @@ public class LibraryManager : MonoBehaviour
         if (selectedChapter == null) return;
 
         var entry = selectedChapter.entry;
-        bool isOwner = UserProfileManager.instance != null
+        bool isOwner = entry.IsLocalDraft || (UserProfileManager.instance != null
             ? UserProfileManager.instance.IsCurrentUser(entry.User)
-            : entry.User == SystemInfo.deviceUniqueIdentifier;
+            : entry.User == SystemInfo.deviceUniqueIdentifier);
 
         if (isOwner)
         {

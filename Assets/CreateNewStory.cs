@@ -36,12 +36,14 @@ public class CreateNewStory : MonoBehaviour
     private HashSet<string> selectedTagIds = new HashSet<string>();
     private List<PrivacyButton> privacyButtons = new List<PrivacyButton>();
     private string _currentPrivacy = "public";
-    private static readonly HashSet<string> PrivacyTags = new HashSet<string>(System.StringComparer.OrdinalIgnoreCase) { "public", "private", "friends_only" };
+    private static readonly HashSet<string> PrivacyTags = new HashSet<string>(System.StringComparer.OrdinalIgnoreCase) { "public", "private", "friends_only", "draft" };
     private static readonly HttpClient httpClient = new HttpClient();
     private static readonly Regex MultiSpaceRegex = new Regex("\\s+", RegexOptions.Compiled);
     private static readonly string[] ProfanityTerms = { "fuck", "shit", "cunt", "bitch", "motherfucker", "wanker", "twat" };
     private static readonly string[] SexualTerms = { "porn", "nude", "naked", "blowjob", "handjob", "cum", "semen", "vagina", "penis", "dick", "boobs", "tits", "sex" };
     private bool isEditMode = false;
+    private int _lastAppliedStickerID = -1;
+    private Coroutine _reviewPhotoCoroutine;
     private float editOriginalLatitude;
     private float editOriginalLongitude;
     private bool hasEditOriginalLocation;
@@ -51,6 +53,33 @@ public class CreateNewStory : MonoBehaviour
 
     [Header("Safety")]
     public bool requirePhotoModerationBeforePosting = false;
+
+    [Header("Validation Messages")]
+    public ValidationMessages validationMessages = new ValidationMessages();
+
+    [System.Serializable]
+    public class ValidationMessages
+    {
+        [Header("Limits")]
+        public int minTitleLength   = 4;
+        public int minContentLength = 20;
+        public int maxContentLength = 500;
+
+        [Header("Screen 2 — Caption")]
+        public string tooShort         = "Write at least {0} characters to continue.";
+        public string profanity        = "Please remove profanity before continuing.";
+        public string explicitContent  = "Please remove explicit content before continuing.";
+        public string lowQuality       = "Please write something more meaningful before continuing.";
+
+        [Header("Post — Full validation")]
+        public string noTitle          = "Add a title of at least {0} characters before posting.";
+        public string contentTooShort  = "Write at least {0} characters before posting.";
+        public string postProfanity    = "Please remove profanity from the story.";
+        public string postExplicit     = "Please remove explicit sexual content.";
+        public string postLowQuality   = "Please make the story clearer and more meaningful before posting.";
+        public string noTags           = "Select at least one tag.";
+        public string photoModeration  = "Photo safety checks are not available right now. Please remove the photo or try again later.";
+    }
 
     public string CurrentPrivacy => _currentPrivacy;
 
@@ -80,13 +109,19 @@ public class CreateNewStory : MonoBehaviour
         RefreshTagButtonStates();
 
         if (title != null)
-            title.onValueChanged.AddListener(_ => { RefreshPostValidationUI(); RecalculateInkReward(); });
+            title.onValueChanged.AddListener(_ => { entry.Title = title.text; RefreshPostValidationUI(); RecalculateInkReward(); });
         if (content != null)
-            content.onValueChanged.AddListener(_ => { RefreshPostValidationUI(); RecalculateInkReward(); });
+            content.onValueChanged.AddListener(_ => { entry.Content = content.text; RefreshPostValidationUI(); RecalculateInkReward(); RefreshCharacterCount(); });
 
-        StickerManager.OnPreviewStickerChanged += _ => RecalculateInkReward();
+        StickerManager.OnPreviewStickerChanged += id => { RecalculateInkReward(); RefreshStickerOverlay(id); };
         FontManager.OnPreviewFontChanged       += _ => RecalculateInkReward();
-        if (photoManager != null) photoManager.onPhotoChanged += RecalculateInkReward;
+        if (photoManager != null)
+        {
+            photoManager.onPhotoChanged += RecalculateInkReward;
+            photoManager.onPhotoChanged += RefreshReviewPhoto;
+            photoManager.onPhotoChanged += RefreshNoPhotoWarning;
+            photoManager.onPhotoChanged += RefreshScreen3DeleteButton;
+        }
 
         RefreshPostValidationUI();
     }
@@ -107,6 +142,7 @@ public class CreateNewStory : MonoBehaviour
         RefreshPrivacyButtons();
         RefreshTagButtonStates();
         RefreshPostValidationUI();
+        RefreshNoPhotoWarning();
         NativeTextEditor.Prewarm();
     }
 
@@ -122,12 +158,56 @@ public class CreateNewStory : MonoBehaviour
         SyncSelectedTagsToEntry();
         photoManager?.Reset();
 
-        isEditMode            = false;
+        isEditMode              = false;
         hasEditOriginalLocation = false;
+        _lastAppliedStickerID   = -1;
         if (inkRewardCounter != null) inkRewardCounter.gameObject.SetActive(true);
     }
 
     // Called by LibraryManager to pre-fill the panel for editing an existing story
+    [Header("Creation Flow Screens")]
+    public GameObject creationFlowParent;
+    public GameObject screen1Canvas;
+    public GameObject screen2Canvas;
+    public GameObject screen3Canvas;
+
+    [Header("Screen 1 — Photo")]
+    public GameObject noPhotoWarning;
+
+    [Header("Screen 2 — Caption")]
+    public GameObject screen2NextButton;
+    public TextMeshProUGUI screen2BlockedReasonText;
+    public TMP_Text characterCountText;
+    public GameObject editLaterButton;
+    public TMP_Text editLaterButtonLabel;
+    public TMP_Text editLaterButtonLabel2;
+    public string editLaterDraftLabel = "Save and Edit Later";
+    public string editLaterLiveLabel  = "Save Changes";
+
+    [Header("Review Screen")]
+    public TMP_Text reviewContentText;
+    public RawImage reviewPhoto;
+    public GameObject reviewPhotoPlaceholder;
+    public DraggableStickerOverlay stickerOverlay;
+    public GameObject screen3CompleteButton;
+    public TextMeshProUGUI screen3BlockedReasonText;
+    public GameObject screen3DeletePhotoButton;
+
+    public void StartNewStory()
+    {
+        isEditMode = false;
+        entry = new GoogleSheetsFetcher.Entry();
+        _lastAppliedStickerID = -1;
+        StickerManager.ResetPreviewSticker();
+        photoManager?.Reset();
+        UpdateEntryLocation();
+        ResetTagSelection();
+        ThemeManager.instance?.ApplyCurrentMapStyleTheme();
+        SetEditLaterLabel(true);
+        if (creationFlowParent != null) creationFlowParent.SetActive(true);
+        if (screen1Canvas != null) screen1Canvas.SetActive(true);
+    }
+
     public void LoadForEdit(GoogleSheetsFetcher.Entry e)
     {
         isEditMode = true;
@@ -140,11 +220,19 @@ public class CreateNewStory : MonoBehaviour
         title.text = e.Title;
         content.text = e.Content;
         SetSelectedTags(e.Tags);
-        photoManager?.LoadExistingPhoto(e.PhotoUrl);
         FontManager.SetPreviewFont(e.FontID);
         StickerManager.SetPreviewSticker(e.StickerID);
+        ThemeManager.instance?.ApplyCurrentMapStyleTheme();
+        SetEditLaterLabel(e.IsLocalDraft);
         SetShareButtonLabel("Update");
         RefreshPostValidationUI();
+        RefreshCharacterCount();
+
+        if (creationFlowParent != null) creationFlowParent.SetActive(true);
+        if (screen1Canvas != null)     screen1Canvas.SetActive(false);
+        if (screen2Canvas != null)     screen2Canvas.SetActive(true);
+        if (screen3Canvas != null)     screen3Canvas.SetActive(false);
+        photoManager?.LoadExistingPhoto(e.PhotoUrl);
     }
 
     /// <summary>
@@ -162,6 +250,7 @@ public class CreateNewStory : MonoBehaviour
                 entry.Content = c;
                 RefreshPostValidationUI();
                 RecalculateInkReward();
+                RefreshReviewContent();
             }
         );
     }
@@ -169,30 +258,56 @@ public class CreateNewStory : MonoBehaviour
     public void UpdateEntryContent()
     {
         entry.Content = content.text;
+        LocalStoryStore.SaveOwned(entry);
+        if (IsLiveEntry()) GoogleSheetsFetcher.instance?.UpdateEntryInFirestore(entry);
     }
 
     public void UpdateEntryTitle()
     {
         entry.Title = title.text;
+        LocalStoryStore.SaveOwned(entry);
+        if (IsLiveEntry()) GoogleSheetsFetcher.instance?.UpdateEntryInFirestore(entry);
     }
 
     public void UpdateEntryLocation()
     {
         entry.Longitude = GPSManager.Instance.longitude;
-        entry.Latitude = GPSManager.Instance.latitude;
+        entry.Latitude  = GPSManager.Instance.latitude;
 
         if (UserProfileManager.instance != null)
         {
-            entry.User = UserProfileManager.instance.UserId;
+            entry.User     = UserProfileManager.instance.UserId;
             entry.UserName = UserProfileManager.instance.HasUsername
                 ? UserProfileManager.instance.Username
                 : string.Empty;
         }
         else
         {
-            entry.User = SystemInfo.deviceUniqueIdentifier;
+            entry.User     = SystemInfo.deviceUniqueIdentifier;
             entry.UserName = string.Empty;
         }
+    }
+
+    private void RefreshCharacterCount()
+    {
+        if (characterCountText == null) return;
+        int current = GetUserContent().Length;
+        int max     = validationMessages.maxContentLength;
+        characterCountText.text = $"{current} / {max}";
+        characterCountText.color = current > max
+            ? Color.red
+            : characterCountText.color;
+    }
+
+    // True only for stories already published to Firestore (have an ID and are not drafts).
+    private bool IsLiveEntry() =>
+        !string.IsNullOrEmpty(entry.ID) && !entry.IsLocalDraft;
+
+    private void SetEditLaterLabel(bool isDraft)
+    {
+        string label = isDraft ? editLaterDraftLabel : editLaterLiveLabel;
+        if (editLaterButtonLabel  != null) editLaterButtonLabel.text  = label;
+        if (editLaterButtonLabel2 != null) editLaterButtonLabel2.text = label;
     }
 
     private void SyncSelectedTagsToEntry()
@@ -340,14 +455,11 @@ public class CreateNewStory : MonoBehaviour
 
     public void RefreshTagButtonStates()
     {
-        foreach (StoryTagButton button in tagButtons)
+        StoryTagButton[] allButtons = FindObjectsByType<StoryTagButton>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+        foreach (StoryTagButton button in allButtons)
         {
-            if (button == null)
-                continue;
-
-            string buttonId = NormalizeTagId(button.tagId);
-            bool selected = selectedTagIds.Contains(buttonId);
-            button.SetSelected(selected);
+            if (button == null) continue;
+            button.SetSelected(selectedTagIds.Contains(NormalizeTagId(button.tagId)));
         }
     }
 
@@ -378,62 +490,128 @@ public class CreateNewStory : MonoBehaviour
 
     private void RefreshPostValidationUI()
     {
-        bool canPost = CanPost(out string reason);
+        bool canPost = CanPost(out string postReason);
 
         if (postButton != null)
             postButton.SetActive(canPost);
 
         if (postBlockedReasonText != null)
-            postBlockedReasonText.text = canPost ? string.Empty : reason;
+            postBlockedReasonText.text = canPost ? string.Empty : postReason;
+
+        if (screen3CompleteButton != null)
+            screen3CompleteButton.SetActive(canPost);
+
+        if (screen3BlockedReasonText != null)
+            screen3BlockedReasonText.text = canPost ? string.Empty : postReason;
+
+        bool canProceed = CanProceedFromScreen2(out string screen2Reason);
+
+        if (screen2NextButton != null)
+            screen2NextButton.SetActive(canProceed);
+
+        if (screen2BlockedReasonText != null)
+            screen2BlockedReasonText.text = canProceed ? string.Empty : screen2Reason;
+
+        bool canSaveDraft = CanSaveDraft();
+        if (editLaterButton != null)
+            editLaterButton.SetActive(canSaveDraft);
     }
 
-    private bool CanPost(out string reason)
+    private string GetUserContent()
     {
-        string titleText = title != null ? title.text : string.Empty;
-        string contentText = content != null ? content.text : string.Empty;
-        string titleTrimmed = string.IsNullOrWhiteSpace(titleText) ? string.Empty : titleText.Trim();
+        string text = content != null ? content.text : string.Empty;
+        if (InspirationPanel.instance != null)
+        {
+            int idx = InspirationPanel.instance.PromptInsertIndex;
+            if (idx >= 0 && idx <= text.Length)
+                text = text.Substring(0, idx);
+        }
+        return text;
+    }
+
+    private bool CanProceedFromScreen2(out string reason)
+    {
+        string contentText = GetUserContent();
         string contentNormalized = NormalizeSpaces(contentText);
-        string lowerCombined = (titleText + " " + contentText).ToLowerInvariant();
+        string contentLower = contentText.ToLowerInvariant();
 
-        if (string.IsNullOrWhiteSpace(titleTrimmed) || string.Equals(titleTrimmed, "ENTER TITLE", StringComparison.OrdinalIgnoreCase))
+        if (contentNormalized.Length < validationMessages.minContentLength)
         {
-            reason = "Add a title before posting.";
+            reason = string.Format(validationMessages.tooShort, validationMessages.minContentLength);
             return false;
         }
 
-        if (contentNormalized.Length < 20)
+        if (ContainsAny(contentLower, ProfanityTerms))
         {
-            reason = "Write at least 20 characters before posting.";
+            reason = validationMessages.profanity;
             return false;
         }
 
-        if (SelectedTagCount < 1)
+        if (ContainsAny(contentLower, SexualTerms))
         {
-            reason = "Select at least one tag.";
-            return false;
-        }
-
-        if (ContainsAny(lowerCombined, ProfanityTerms))
-        {
-            reason = "Please remove profanity from the story.";
-            return false;
-        }
-
-        if (ContainsAny(lowerCombined, SexualTerms))
-        {
-            reason = "Please remove explicit sexual content.";
+            reason = validationMessages.explicitContent;
             return false;
         }
 
         if (LooksLowQuality(contentNormalized))
         {
-            reason = "Please make the story clearer and more meaningful before posting.";
+            reason = validationMessages.lowQuality;
+            return false;
+        }
+
+        reason = string.Empty;
+        return true;
+    }
+
+    private bool CanPost(out string reason)
+    {
+        string titleText = title != null ? title.text : string.Empty;
+        string contentText = GetUserContent();
+        string titleTrimmed = string.IsNullOrWhiteSpace(titleText) ? string.Empty : titleText.Trim();
+        string contentNormalized = NormalizeSpaces(contentText);
+        string lowerCombined = (titleText + " " + contentText).ToLowerInvariant();
+
+        if (string.IsNullOrWhiteSpace(titleTrimmed)
+            || string.Equals(titleTrimmed, "ENTER TITLE", StringComparison.OrdinalIgnoreCase)
+            || titleTrimmed.Length < validationMessages.minTitleLength)
+        {
+            reason = string.Format(validationMessages.noTitle, validationMessages.minTitleLength);
+            return false;
+        }
+
+        if (contentNormalized.Length < validationMessages.minContentLength)
+        {
+            reason = string.Format(validationMessages.contentTooShort, validationMessages.minContentLength);
+            return false;
+        }
+
+        if (SelectedTagCount < 1)
+        {
+            reason = validationMessages.noTags;
+            return false;
+        }
+
+        if (ContainsAny(lowerCombined, ProfanityTerms))
+        {
+            reason = validationMessages.postProfanity;
+            return false;
+        }
+
+        if (ContainsAny(lowerCombined, SexualTerms))
+        {
+            reason = validationMessages.postExplicit;
+            return false;
+        }
+
+        if (LooksLowQuality(contentNormalized))
+        {
+            reason = validationMessages.postLowQuality;
             return false;
         }
 
         if (requirePhotoModerationBeforePosting && photoManager != null && photoManager.CapturedPhoto != null)
         {
-            reason = "Photo safety checks are not available right now. Please remove the photo or try again later.";
+            reason = validationMessages.photoModeration;
             return false;
         }
 
@@ -506,41 +684,230 @@ public class CreateNewStory : MonoBehaviour
         return false;
     }
 
-    public void Preview()
+    private bool CanSaveDraft() => true;
+
+    public void SaveLater()
     {
-        entry.Theme     = ThemeManager.instance.selectedTheme.themeName;
+        entry.Theme     = ThemeManager.instance != null && ThemeManager.instance.selectedTheme != null
+            ? ThemeManager.instance.selectedTheme.themeName : string.Empty;
         entry.StickerID = StickerManager.CurrentPreviewStickerID;
         entry.FontID    = FontManager.CurrentPreviewFontID;
+        CaptureStickerPosition();
+        string rawTitle = title != null ? title.text.Trim() : string.Empty;
+        entry.Title     = string.IsNullOrWhiteSpace(rawTitle)
+            || string.Equals(rawTitle, "ENTER TITLE", StringComparison.OrdinalIgnoreCase)
+            ? "Untitled" : rawTitle;
+        entry.Content   = !string.IsNullOrEmpty(content?.text) ? content.text : entry.Content ?? string.Empty;
+        entry.IsLocalDraft = true;
+        if (string.IsNullOrEmpty(entry.User))
+            entry.User = UserProfileManager.instance?.UserId ?? SystemInfo.deviceUniqueIdentifier;
+        if (string.IsNullOrEmpty(entry.UserName))
+            entry.UserName = UserProfileManager.instance != null && UserProfileManager.instance.HasUsername
+                ? UserProfileManager.instance.Username : string.Empty;
 
-        // Editing an existing story — skip preview, update immediately and close
+        UpdateEntryLocation();
+        SyncSelectedTagsToEntry();
+        if (!entry.Tags.Contains("draft"))
+            entry.Tags.Add("draft");
+
+        if (string.IsNullOrEmpty(entry.ID))
+        {
+            entry.ID      = System.Guid.NewGuid().ToString("N");
+            entry.Created = System.DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        }
+
+        entry.PhotoUrl = string.IsNullOrEmpty(entry.PhotoUrl) ? string.Empty : entry.PhotoUrl;
+
+        var draftEntry = entry;
+
+        byte[] jpegBytes = photoManager?.CapturedPhoto != null
+            ? photoManager.CapturedPhoto.EncodeToJPG(75) : null;
+        if (jpegBytes != null)
+            PhotoUploadQueue.Enqueue(draftEntry.ID, jpegBytes);
+
+        GoogleSheetsFetcher.instance.SpawnNewMapPointer(draftEntry);
+
+        FinishPost();
+    }
+
+    public void ShowReviewScreen()
+    {
+        // Sync whichever source has content into the other so RefreshReviewContent reads correctly
+        if (content != null && !string.IsNullOrEmpty(content.text))
+            entry.Content = content.text;
+        else if (!string.IsNullOrEmpty(entry.Content) && content != null)
+            content.text = entry.Content;
+
+        RefreshReviewContent();
+        RefreshScreen3DeleteButton();
+        if (screen2Canvas != null) screen2Canvas.SetActive(false);
+        if (screen3Canvas != null) screen3Canvas.SetActive(true);
+        RefreshReviewPhoto();
+        RefreshStickerOverlay(StickerManager.CurrentPreviewStickerID);
+    }
+
+    private void RefreshReviewContent()
+    {
+        if (reviewContentText == null) return;
+        string text = !string.IsNullOrEmpty(entry.Content)
+            ? entry.Content
+            : (content != null ? content.text : string.Empty);
+        reviewContentText.text = text;
+    }
+
+    private void CaptureStickerPosition()
+    {
+        if (stickerOverlay == null || !stickerOverlay.gameObject.activeInHierarchy) return;
+        entry.StickerX     = stickerOverlay.NormalizedX;
+        entry.StickerY     = stickerOverlay.NormalizedY;
+        entry.StickerScale = stickerOverlay.Scale;
+    }
+
+    private void RefreshStickerOverlay(int stickerID)
+    {
+        if (stickerOverlay == null) return;
+        if (screen3Canvas == null || !screen3Canvas.activeSelf) return;
+        if (stickerID <= 0 || StickerManager.instance == null)
+        {
+            stickerOverlay.Clear();
+            _lastAppliedStickerID = -1;
+            return;
+        }
+        Sprite sprite = StickerManager.instance.GetSticker(stickerID);
+        bool isNewSticker = stickerID != _lastAppliedStickerID;
+        float nx = isNewSticker ? entry.StickerX : stickerOverlay.NormalizedX;
+        float ny = isNewSticker ? entry.StickerY : stickerOverlay.NormalizedY;
+        float sc = isNewSticker ? entry.StickerScale : stickerOverlay.Scale;
+        stickerOverlay.SetSticker(sprite, nx, ny, sc);
+        _lastAppliedStickerID = stickerID;
+    }
+
+    private void RefreshNoPhotoWarning()
+    {
+        if (noPhotoWarning == null) return;
+        noPhotoWarning.SetActive(photoManager == null || photoManager.CapturedPhoto == null);
+    }
+
+    private void RefreshScreen3DeleteButton()
+    {
+        if (screen3DeletePhotoButton == null) return;
+        bool hasPhoto = (photoManager != null && photoManager.CapturedPhoto != null)
+                     || !string.IsNullOrEmpty(entry.PhotoUrl)
+                     || (!string.IsNullOrEmpty(entry.ID) && PhotoUploadQueue.HasPending(entry.ID));
+        screen3DeletePhotoButton.SetActive(hasPhoto);
+    }
+
+    public void DeleteReviewPhoto()
+    {
+        entry.PhotoUrl = string.Empty;
+        photoManager?.DeletePhoto();
+    }
+
+    private void RefreshReviewPhoto()
+    {
+        if (reviewPhoto == null) return;
+
+        // Use any texture already in memory — avoids re-fetching from the network
+        Texture2D inMemory = photoManager != null ? photoManager.ActivePhotoTexture : null;
+
+        string photoUrl = entry.PhotoUrl;
+        if (string.IsNullOrEmpty(photoUrl) && !string.IsNullOrEmpty(entry.ID) && PhotoUploadQueue.HasPending(entry.ID))
+            photoUrl = "file://" + PhotoUploadQueue.FilePath(entry.ID);
+
+        if (inMemory != null)
+        {
+            if (_reviewPhotoCoroutine != null) { StopCoroutine(_reviewPhotoCoroutine); _reviewPhotoCoroutine = null; }
+            reviewPhoto.enabled = true;
+            StoryPhotoManager.ApplyPhotoToRawImage(inMemory, reviewPhoto);
+            if (reviewPhotoPlaceholder != null) reviewPhotoPlaceholder.SetActive(false);
+        }
+        else if (!string.IsNullOrEmpty(photoUrl))
+        {
+            reviewPhoto.enabled = true;
+            if (reviewPhotoPlaceholder != null) reviewPhotoPlaceholder.SetActive(false);
+            if (_reviewPhotoCoroutine != null) StopCoroutine(_reviewPhotoCoroutine);
+            _reviewPhotoCoroutine = StartCoroutine(LoadReviewPhotoFromUrl(photoUrl));
+        }
+        else if (entry.Latitude != 0 || entry.Longitude != 0)
+        {
+            reviewPhoto.enabled = true;
+            reviewPhoto.texture = null;
+            if (reviewPhotoPlaceholder != null) reviewPhotoPlaceholder.SetActive(false);
+            StartCoroutine(LoadReviewMapSnapshot());
+        }
+        else
+        {
+            reviewPhoto.enabled = false;
+            if (reviewPhotoPlaceholder != null) reviewPhotoPlaceholder.SetActive(true);
+        }
+    }
+
+    private IEnumerator LoadReviewPhotoFromUrl(string url)
+    {
+        Texture2D loaded = null;
+        yield return PhotoAsset.FetchTexture(url, tex => loaded = tex);
+        if (_reviewPhotoCoroutine == null) yield break; // cancelled by a newer load
+        if (loaded != null && reviewPhoto != null)
+            StoryPhotoManager.ApplyPhotoToRawImage(loaded, reviewPhoto);
+        _reviewPhotoCoroutine = null;
+    }
+
+    private IEnumerator LoadReviewMapSnapshot()
+    {
+        if (reviewPhoto == null) yield break;
+        string styleId = !string.IsNullOrEmpty(MapLoader.instance?.mapStyle) ? MapLoader.instance.mapStyle : "mapbox/dark-v11";
+        string token   = MapLoader.instance?.mapboxToken ?? "";
+        string pin     = UI_StoryPanel.MapPinColor(entry);
+        string url     = $"https://api.mapbox.com/styles/v1/{styleId}/static/pin-l+{pin}({entry.Longitude},{entry.Latitude})/{entry.Longitude},{entry.Latitude},12,0/640x360@2x?access_token={token}";
+
+        yield return MapboxImageCache.Fetch(url, tex =>
+        {
+            if (reviewPhoto == null || tex == null) return;
+            if (photoManager != null && photoManager.ActivePhotoTexture != null) return;
+            reviewPhoto.color   = Color.white;
+            reviewPhoto.texture = tex;
+        });
+    }
+
+    public void Preview()
+    {
+        entry.Theme     = ThemeManager.instance != null && ThemeManager.instance.selectedTheme != null
+            ? ThemeManager.instance.selectedTheme.themeName
+            : string.Empty;
+        entry.StickerID = StickerManager.CurrentPreviewStickerID;
+        entry.FontID    = FontManager.CurrentPreviewFontID;
+        CaptureStickerPosition();
+
         if (isEditMode)
         {
             entry.Title   = title.text;
             entry.Content = content.text;
-            FinishEdit(entry);
-            return;
+            SyncSelectedTagsToEntry();
+        }
+        else
+        {
+            UpdateEntryLocation();
         }
 
-        UpdateEntryLocation();
         storyPanel.SetContentText(entry.Content);
         storyPanel.title.text = entry.Title;
         storyPanel.SetAuthor(entry.User, entry.UserName);
         storyPanel.BindStoryEntry(null);
+        storyPanel.PositionSticker(entry);
         storyPanel.SetTags(entry.Tags);
         storyPanel.likes.text = "0";
         storyPanel.views.text = CompactCountFormatter.FormatViews(0);
         storyPanel.location_expire_text.text = "Preview";
-
-        entry.ID = $"{entry.User}_{entry.Latitude}_{entry.Longitude}";
-        entry.Created = 1738925500;
-        entry.Expire = StoryLifetimeManager.instance != null
-            ? StoryLifetimeManager.instance.GetInitialExpire()
-            : DateTimeOffset.UtcNow.AddDays(365).ToUnixTimeSeconds();
-
         storyPanel.SetTypeIcon(entry);
-        storyPanel.SetPhoto(photoManager != null ? photoManager.CapturedPhoto : null);
+
         storyPanel.shareUI.gameObject.SetActive(true);
-        storyPanel.gameObject.SetActive(true);
+        storyPanel.gameObject.SetActive(true); // activate first so container rect is valid
+
+        Texture2D previewPhoto = photoManager?.ActivePhotoTexture;
+        if (previewPhoto != null)
+            storyPanel.SetPhoto(previewPhoto);
+        else
+            storyPanel.SetPhoto(entry.PhotoUrl, entry.ID);
     }
 
     public void PreviewStarEntry()
@@ -582,6 +949,7 @@ public class CreateNewStory : MonoBehaviour
 
         entry.StickerID = StickerManager.CurrentPreviewStickerID;
         entry.FontID    = FontManager.CurrentPreviewFontID;
+        CaptureStickerPosition();
 
         if (isEditMode)
         {
@@ -715,7 +1083,19 @@ public class CreateNewStory : MonoBehaviour
             GoogleSheetsFetcher.instance.UpdateEntryInFirestore(e);
         }
 
-        if (e.pointer != null) e.pointer.textbox.text = e.Title;
+        LocalStoryStore.SaveOwned(e);
+        e.pointer?.BindEntry(e);
+        if (e.pointer != null)
+        {
+            var sm = e.pointer.GetComponent<GoogleSheetManager>();
+            if (sm != null)
+            {
+                sm.title   = e.Title;
+                sm.content = e.Content;
+                sm.theme   = e.Theme;
+                sm.photoUrl = e.PhotoUrl ?? string.Empty;
+            }
+        }
         LibraryManager.instance?.PopulateList();
         isEditMode = false;
         hasEditOriginalLocation = false;

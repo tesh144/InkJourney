@@ -25,8 +25,10 @@ public static class LocalStoryStore
 
         public string ID, User, UserName, Title, Content, Theme, Track, Font, PhotoUrl;
         public float Latitude, Longitude;
-        public int Saves, LikesCount, Views;
+        public int Saves, LikesCount, Views, StickerID, FontID;
+        public float StickerX = 0.5f, StickerY = 0.5f, StickerScale = 1.0f;
         public long Created, LastUpdated, Expire;
+        public bool IsLocalDraft;
         public List<string> Tags           = new List<string>();
         public List<string> SavedByUserIds = new List<string>();
         public List<StoredComment> Comments = new List<StoredComment>();
@@ -47,8 +49,24 @@ public static class LocalStoryStore
     public static List<StoredEntry> LoadOwned()     => Load(OwnedPath);
     public static List<StoredEntry> LoadCollected() => Load(CollectedPath);
 
-    public static void SaveOwned(GoogleSheetsFetcher.Entry e)      => Save(OwnedPath,     e);
-    public static void SaveCollected(GoogleSheetsFetcher.Entry e)  => Save(CollectedPath,  e);
+    public static void SaveOwned(GoogleSheetsFetcher.Entry e)
+    {
+        if (!IsValid(e)) return;
+        Save(OwnedPath, e);
+    }
+
+    public static void SaveCollected(GoogleSheetsFetcher.Entry e)
+    {
+        if (!IsValid(e)) return;
+        Save(CollectedPath, e);
+    }
+
+    private static bool IsValid(GoogleSheetsFetcher.Entry e) =>
+        e != null
+        && !string.IsNullOrWhiteSpace(e.ID)
+        && !string.IsNullOrWhiteSpace(e.User)
+        && !string.IsNullOrWhiteSpace(e.Title)
+        && !string.Equals(e.Title.Trim(), "ENTER TITLE", System.StringComparison.OrdinalIgnoreCase);
 
     public static void RemoveOwned(string id)      => Remove(OwnedPath,     id);
     public static void RemoveCollected(string id)  => Remove(CollectedPath,  id);
@@ -81,9 +99,15 @@ public static class LocalStoryStore
             Created        = s.Created,
             LastUpdated    = s.LastUpdated,
             Expire         = s.Expire,
+            StickerID      = s.StickerID,
+            FontID         = s.FontID,
+            StickerX       = s.StickerX,
+            StickerY       = s.StickerY,
+            StickerScale   = s.StickerScale,
             Tags           = s.Tags            ?? new List<string>(),
             SavedByUserIds = s.SavedByUserIds  ?? new List<string>(),
-            Comments = ToLiveComments(s.Comments)
+            Comments       = ToLiveComments(s.Comments),
+            IsLocalDraft   = s.IsLocalDraft,
         };
     }
 
@@ -200,8 +224,14 @@ public static class LocalStoryStore
         Created        = e.Created,
         LastUpdated    = e.LastUpdated,
         Expire         = e.Expire,
+        StickerID      = e.StickerID,
+        FontID         = e.FontID,
+        StickerX       = e.StickerX,
+        StickerY       = e.StickerY,
+        StickerScale   = e.StickerScale,
         Tags           = e.Tags            ?? new List<string>(),
         SavedByUserIds = e.SavedByUserIds  ?? new List<string>(),
-        Comments       = ToStoredComments(e.Comments)
+        Comments       = ToStoredComments(e.Comments),
+        IsLocalDraft   = e.IsLocalDraft,
     };
 }
