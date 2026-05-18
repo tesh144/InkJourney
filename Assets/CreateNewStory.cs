@@ -226,7 +226,7 @@ public class CreateNewStory : MonoBehaviour
         isEditMode = true;
         _returnToMapOnFinish = false;
         inkRewardCounter?.ResetWithoutApplying();
-        if (inkRewardCounter != null) inkRewardCounter.gameObject.SetActive(false);
+        if (inkRewardCounter != null) inkRewardCounter.gameObject.SetActive(e.IsLocalDraft);
         entry = e;
         editOriginalLatitude = e != null ? e.Latitude : 0f;
         editOriginalLongitude = e != null ? e.Longitude : 0f;
@@ -261,7 +261,7 @@ public class CreateNewStory : MonoBehaviour
     {
         NativeTextEditor.Show(
             title, content,
-            placeholder: "Write your story…",
+            placeholder:      "Write your story…",
             onComplete: (t, c) =>
             {
                 entry.Title = t;
@@ -269,8 +269,38 @@ public class CreateNewStory : MonoBehaviour
                 RefreshPostValidationUI();
                 RecalculateInkReward();
                 RefreshReviewContent();
-            }
+            },
+            baseReward:       CalculateBaseRewardWithoutTitle(),
+            titleReward:      inkRewardCounter != null ? inkRewardCounter.titleReward : 0,
+            minTitleLength:   validationMessages.minTitleLength,
+            rewardThresholds: BuildThresholdsString()
         );
+    }
+
+    private int CalculateBaseRewardWithoutTitle()
+    {
+        if (inkRewardCounter == null || isEditMode) return 0;
+        int reward = 0;
+        reward += Mathf.Min(selectedTagIds.Count, inkRewardCounter.maxTagsRewarded) * inkRewardCounter.inkPerTag;
+        if (StickerManager.CurrentPreviewStickerID > 0) reward += inkRewardCounter.stickerReward;
+        if (photoManager?.CapturedPhoto != null)        reward += inkRewardCounter.photoReward;
+        if (_currentPrivacy == "public")                reward += inkRewardCounter.publicReward;
+        if (FontManager.CurrentPreviewFontID > 0)       reward += inkRewardCounter.fontReward;
+        return reward;
+    }
+
+    private string BuildThresholdsString()
+    {
+        if (inkRewardCounter?.wordThresholds == null) return "";
+        var sb = new System.Text.StringBuilder();
+        foreach (var t in inkRewardCounter.wordThresholds)
+        {
+            if (sb.Length > 0) sb.Append(',');
+            sb.Append(t.minWords);
+            sb.Append(',');
+            sb.Append(t.inkReward);
+        }
+        return sb.ToString();
     }
 
     public void UpdateEntryContent()

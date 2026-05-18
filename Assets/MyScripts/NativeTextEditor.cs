@@ -45,9 +45,13 @@ public class NativeTextEditor : MonoBehaviour
     /// </summary>
     public static void Show(TMP_InputField titleField,
                             TMP_InputField contentField,
-                            string placeholder             = "",
+                            string placeholder                = "",
                             Action<string, string> onComplete = null,
-                            Action onCancel                = null)
+                            Action onCancel                   = null,
+                            int baseReward                    = 0,
+                            int titleReward                   = 0,
+                            int minTitleLength                = 0,
+                            string rewardThresholds           = "")
     {
         if (instance == null) { Debug.LogError("[NativeTextEditor] No instance."); return; }
 
@@ -60,7 +64,11 @@ public class NativeTextEditor : MonoBehaviour
         NativeTextEditor_Show(
             titleField?.text   ?? "",
             contentField?.text ?? "",
-            placeholder);
+            placeholder,
+            baseReward,
+            titleReward,
+            minTitleLength,
+            rewardThresholds);
 #else
         // Editor fallback — activate content field directly
         contentField?.Select();
@@ -92,7 +100,7 @@ public class NativeTextEditor : MonoBehaviour
     // ─── Native bindings ─────────────────────────────────────────────────────
 
 #if UNITY_IOS && !UNITY_EDITOR
-    [DllImport("__Internal")] static extern void NativeTextEditor_Show(string title, string content, string placeholder);
+    [DllImport("__Internal")] static extern void NativeTextEditor_Show(string title, string content, string placeholder, int baseReward, int titleReward, int minTitleLength, string thresholds);
     [DllImport("__Internal")] static extern void NativeTextEditor_Hide();
     [DllImport("__Internal")] static extern void NativeTextEditor_Prewarm();
     [DllImport("__Internal")] static extern void NativeTextEditor_StopPrewarm();

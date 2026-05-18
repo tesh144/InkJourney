@@ -12,7 +12,9 @@ static const CGFloat kTitleFontSize   = 24.0;
 // ─────────────────────────────────────────────────────────────────────────────
 @interface NativeTextEditorController : NSObject <UITextViewDelegate, UITextFieldDelegate>
 + (instancetype)shared;
-- (void)showWithTitle:(NSString *)title content:(NSString *)content;
+- (void)showWithTitle:(NSString *)title content:(NSString *)content
+           baseReward:(int)baseReward titleReward:(int)titleReward
+       minTitleLength:(int)minTitleLength thresholds:(NSString *)thresholds;
 - (void)hide;
 @end
 
@@ -25,6 +27,11 @@ static const CGFloat kTitleFontSize   = 24.0;
     AVCaptureSession           *_captureSession;
     AVCaptureVideoPreviewLayer *_previewLayer;
     BOOL                        _hasCameraBackground;
+    int                         _baseReward;
+    int                         _titleReward;
+    int                         _minTitleLength;
+    NSArray<NSArray<NSNumber *> *> *_wordThresholds;
+    UILabel                    *_rewardLabel;
 }
 
 + (instancetype)shared {
@@ -36,9 +43,21 @@ static const CGFloat kTitleFontSize   = 24.0;
 
 // ── Show ─────────────────────────────────────────────────────────────────────
 
-- (void)showWithTitle:(NSString *)title content:(NSString *)content {
+- (void)showWithTitle:(NSString *)title content:(NSString *)content
+           baseReward:(int)baseReward titleReward:(int)titleReward
+       minTitleLength:(int)minTitleLength thresholds:(NSString *)thresholds {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (self->_container) return;
+
+        self->_baseReward     = baseReward;
+        self->_titleReward    = titleReward;
+        self->_minTitleLength = minTitleLength;
+
+        NSMutableArray *parsed = [NSMutableArray new];
+        NSArray<NSString *> *parts = [thresholds componentsSeparatedByString:@","];
+        for (NSUInteger i = 0; i + 1 < parts.count; i += 2)
+            [parsed addObject:@[@(parts[i].intValue), @(parts[i + 1].intValue)]];
+        self->_wordThresholds = [parsed copy];
 
         UIWindow *window = [UIApplication sharedApplication].keyWindow
                         ?: [UIApplication sharedApplication].windows.firstObject;
@@ -177,6 +196,7 @@ static const CGFloat kTitleFontSize   = 24.0;
         self->_textView.typingAttributes = self->_defaultAttrs;
 
         [self->_container addSubview:self->_textView];
+        [self updateRewardLabel];
 
         // ── Keyboard notification ──────────────────────────────────────────
         [[NSNotificationCenter defaultCenter]
@@ -308,7 +328,15 @@ static const CGFloat kTitleFontSize   = 24.0;
     UIBarButtonItem *flex = [[UIBarButtonItem alloc]
         initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
 
-    bar.items = @[bold, italic, underline, bullet, flex];
+    _rewardLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 72, 44)];
+    _rewardLabel.textAlignment = NSTextAlignmentRight;
+    _rewardLabel.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightMedium];
+    _rewardLabel.textColor = _hasCameraBackground
+        ? [UIColor colorWithWhite:1 alpha:0.75]
+        : [UIColor secondaryLabelColor];
+    UIBarButtonItem *rewardItem = [[UIBarButtonItem alloc] initWithCustomView:_rewardLabel];
+
+    bar.items = @[bold, italic, underline, bullet, flex, rewardItem];
     return bar;
 }
 
@@ -420,6 +448,50 @@ static const CGFloat kTitleFontSize   = 24.0;
     return [UIFont fontWithDescriptor:d size:base.pointSize] ?: base;
 }
 
+// ── Reward label ──────────────────────────────────────────────────────────────
+
+- (int)countWords:(NSString *)text {
+    if (!text || text.length == 0) return 0;
+    NSArray<NSString *> *parts = [text componentsSeparatedByCharactersInSet:
+        [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    int count = 0;
+    for (NSString *w in parts) if (w.length > 0) count++;
+    return count;
+}
+
+- (BOOL)isTitleValid:(NSString *)text {
+    NSString *t = [text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    if (t.length == 0) return NO;
+    if ([t caseInsensitiveCompare:@"ENTER TITLE"] == NSOrderedSame) return NO;
+    if ([t caseInsensitiveCompare:@"Title"] == NSOrderedSame) return NO;
+    return (int)t.length >= _minTitleLength;
+}
+
+- (void)updateRewardLabel {
+    if (!_rewardLabel) return;
+    int wordReward = 0;
+    int words = [self countWords:_textView ? _textView.text : @""];
+    for (NSArray<NSNumber *> *tier in _wordThresholds)
+        if (words >= tier[0].intValue && tier[1].intValue > wordReward)
+            wordReward = tier[1].intValue;
+    int titleBonus = [self isTitleValid:_titleField ? _titleField.text : @""] ? _titleReward : 0;
+    int total = _baseReward + titleBonus + wordReward;
+    _rewardLabel.text = [NSString stringWithFormat:@"+%d ink", total];
+}
+
+// ── UITextViewDelegate ────────────────────────────────────────────────────────
+
+- (void)textViewDidChange:(UITextView *)textView {
+    textView.typingAttributes = _defaultAttrs;
+    [self updateRewardLabel];
+}
+
+// ── UITextFieldDelegate (title) ───────────────────────────────────────────────
+
+- (void)textFieldDidChangeSelection:(UITextField *)textField {
+    [self updateRewardLabel];
+}
+
 // ── Done / Cancel ─────────────────────────────────────────────────────────────
 
 - (void)onDone {
@@ -454,9 +526,11 @@ static const CGFloat kTitleFontSize   = 24.0;
         [UIView animateWithDuration:0.2 animations:^{ self->_container.alpha = 0; }
                          completion:^(BOOL _) {
             [self->_container removeFromSuperview];
-            self->_container          = nil;
-            self->_textView           = nil;
-            self->_titleField         = nil;
+            self->_container           = nil;
+            self->_textView            = nil;
+            self->_titleField          = nil;
+            self->_rewardLabel         = nil;
+            self->_wordThresholds      = nil;
             self->_hasCameraBackground = NO;
         }];
     });
@@ -505,10 +579,14 @@ static const CGFloat kTitleFontSize   = 24.0;
 // ─────────────────────────────────────────────────────────────────────────────
 extern "C" {
 
-void NativeTextEditor_Show(const char *title, const char *content, const char *placeholder) {
-    NSString *t = title   ? [NSString stringWithUTF8String:title]   : @"";
-    NSString *c = content ? [NSString stringWithUTF8String:content] : @"";
-    [[NativeTextEditorController shared] showWithTitle:t content:c];
+void NativeTextEditor_Show(const char *title, const char *content, const char *placeholder,
+                           int baseReward, int titleReward, int minTitleLength, const char *thresholds) {
+    NSString *t  = title      ? [NSString stringWithUTF8String:title]      : @"";
+    NSString *c  = content    ? [NSString stringWithUTF8String:content]    : @"";
+    NSString *th = thresholds ? [NSString stringWithUTF8String:thresholds] : @"";
+    [[NativeTextEditorController shared] showWithTitle:t content:c
+                                           baseReward:baseReward titleReward:titleReward
+                                       minTitleLength:minTitleLength thresholds:th];
 }
 
 void NativeTextEditor_Hide() {
