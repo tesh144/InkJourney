@@ -33,7 +33,7 @@ Material:
     - _MirrorX: 1
     - _MirrorY: 1
     - _RotationSteps: 0
-    - _TextureAspect: 1.7777778
+    - _TextureAspect: 1.3333334
     m_Colors:
     - _Color: {r: 1, g: 1, b: 1, a: 1}
   m_BuildTextureStacks: []

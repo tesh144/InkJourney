@@ -28,6 +28,12 @@ public class GoogleSheetManager : MonoBehaviour
     [Button("Turn On Story")]
     public void TurnOnStory()
     {
+        if (mapPointer?.entry?.IsLocalDraft == true)
+        {
+            CreateNewStory.instance?.LoadForEdit(mapPointer.entry);
+            return;
+        }
+
         if (GetDistanceToParentCenter() > 200f)
             StartCoroutine(TurnOnStoryCoroutine());
         else

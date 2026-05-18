@@ -42,6 +42,10 @@ public class CreateNewStory : MonoBehaviour
     private static readonly string[] ProfanityTerms = { "fuck", "shit", "cunt", "bitch", "motherfucker", "wanker", "twat" };
     private static readonly string[] SexualTerms = { "porn", "nude", "naked", "blowjob", "handjob", "cum", "semen", "vagina", "penis", "dick", "boobs", "tits", "sex" };
     private bool isEditMode = false;
+    private bool _returnToMapOnFinish = false;
+    private bool _photoWarningShown = false;
+    private bool _screen2Touched = false;
+    private Color _characterCountDefaultColor;
     private int _lastAppliedStickerID = -1;
     private Coroutine _reviewPhotoCoroutine;
     private float editOriginalLatitude;
@@ -111,7 +115,7 @@ public class CreateNewStory : MonoBehaviour
         if (title != null)
             title.onValueChanged.AddListener(_ => { entry.Title = title.text; RefreshPostValidationUI(); RecalculateInkReward(); });
         if (content != null)
-            content.onValueChanged.AddListener(_ => { entry.Content = content.text; RefreshPostValidationUI(); RecalculateInkReward(); RefreshCharacterCount(); });
+            content.onValueChanged.AddListener(_ => { _screen2Touched = true; entry.Content = content.text; RefreshPostValidationUI(); RecalculateInkReward(); RefreshCharacterCount(); });
 
         StickerManager.OnPreviewStickerChanged += id => { RecalculateInkReward(); RefreshStickerOverlay(id); };
         FontManager.OnPreviewFontChanged       += _ => RecalculateInkReward();
@@ -122,6 +126,9 @@ public class CreateNewStory : MonoBehaviour
             photoManager.onPhotoChanged += RefreshNoPhotoWarning;
             photoManager.onPhotoChanged += RefreshScreen3DeleteButton;
         }
+
+        if (characterCountText != null)
+            _characterCountDefaultColor = characterCountText.color;
 
         RefreshPostValidationUI();
     }
@@ -142,7 +149,8 @@ public class CreateNewStory : MonoBehaviour
         RefreshPrivacyButtons();
         RefreshTagButtonStates();
         RefreshPostValidationUI();
-        RefreshNoPhotoWarning();
+        _photoWarningShown = false;
+        if (noPhotoWarning != null) noPhotoWarning.SetActive(false);
         NativeTextEditor.Prewarm();
     }
 
@@ -159,6 +167,9 @@ public class CreateNewStory : MonoBehaviour
         photoManager?.Reset();
 
         isEditMode              = false;
+        _returnToMapOnFinish    = false;
+        _photoWarningShown      = false;
+        _screen2Touched         = false;
         hasEditOriginalLocation = false;
         _lastAppliedStickerID   = -1;
         if (inkRewardCounter != null) inkRewardCounter.gameObject.SetActive(true);
@@ -196,6 +207,8 @@ public class CreateNewStory : MonoBehaviour
     public void StartNewStory()
     {
         isEditMode = false;
+        _returnToMapOnFinish = true;
+        _photoWarningShown = false;
         entry = new GoogleSheetsFetcher.Entry();
         _lastAppliedStickerID = -1;
         StickerManager.ResetPreviewSticker();
@@ -211,6 +224,7 @@ public class CreateNewStory : MonoBehaviour
     public void LoadForEdit(GoogleSheetsFetcher.Entry e)
     {
         isEditMode = true;
+        _returnToMapOnFinish = false;
         inkRewardCounter?.ResetWithoutApplying();
         if (inkRewardCounter != null) inkRewardCounter.gameObject.SetActive(false);
         entry = e;
@@ -220,6 +234,9 @@ public class CreateNewStory : MonoBehaviour
         title.text = e.Title;
         content.text = e.Content;
         SetSelectedTags(e.Tags);
+        // Draft entries store "draft" as their privacy tag — reset to a publishable default
+        if (string.Equals(_currentPrivacy, "draft", StringComparison.OrdinalIgnoreCase))
+            SetPrivacy(PrivacyDefaultManager.DefaultPrivacy ?? "public");
         FontManager.SetPreviewFont(e.FontID);
         StickerManager.SetPreviewSticker(e.StickerID);
         ThemeManager.instance?.ApplyCurrentMapStyleTheme();
@@ -232,6 +249,7 @@ public class CreateNewStory : MonoBehaviour
         if (screen1Canvas != null)     screen1Canvas.SetActive(false);
         if (screen2Canvas != null)     screen2Canvas.SetActive(true);
         if (screen3Canvas != null)     screen3Canvas.SetActive(false);
+        RefreshCharacterCount();
         photoManager?.LoadExistingPhoto(e.PhotoUrl);
     }
 
@@ -292,11 +310,12 @@ public class CreateNewStory : MonoBehaviour
     {
         if (characterCountText == null) return;
         int current = GetUserContent().Length;
+        int min     = validationMessages.minContentLength;
         int max     = validationMessages.maxContentLength;
         characterCountText.text = $"{current} / {max}";
-        characterCountText.color = current > max
+        characterCountText.color = (current < min || current > max)
             ? Color.red
-            : characterCountText.color;
+            : _characterCountDefaultColor;
     }
 
     // True only for stories already published to Firestore (have an ID and are not drafts).
@@ -477,9 +496,13 @@ public class CreateNewStory : MonoBehaviour
     private void RecalculateInkReward()
     {
         if (inkRewardCounter == null || isEditMode) return;
+        string rawTitle = title?.text?.Trim() ?? string.Empty;
+        bool titleValid = !string.IsNullOrWhiteSpace(rawTitle)
+            && !string.Equals(rawTitle, "ENTER TITLE", StringComparison.OrdinalIgnoreCase)
+            && rawTitle.Length >= validationMessages.minTitleLength;
         inkRewardCounter.Recalculate(
             content:       content?.text ?? "",
-            title:         title?.text ?? "",
+            title:         titleValid ? rawTitle : string.Empty,
             tagCount:      selectedTagIds.Count,
             hasSticker:    StickerManager.CurrentPreviewStickerID > 0,
             hasPhoto:      photoManager != null && photoManager.CapturedPhoto != null,
@@ -510,7 +533,11 @@ public class CreateNewStory : MonoBehaviour
             screen2NextButton.SetActive(canProceed);
 
         if (screen2BlockedReasonText != null)
-            screen2BlockedReasonText.text = canProceed ? string.Empty : screen2Reason;
+        {
+            bool showReason = _screen2Touched && !canProceed;
+            screen2BlockedReasonText.gameObject.SetActive(showReason);
+            if (showReason) screen2BlockedReasonText.text = screen2Reason;
+        }
 
         bool canSaveDraft = CanSaveDraft();
         if (editLaterButton != null)
@@ -681,6 +708,26 @@ public class CreateNewStory : MonoBehaviour
         if (digitCount > 0 && ((float)digitCount / Mathf.Max(1, normalizedText.Length)) > 0.35f)
             return true;
 
+        // Keyboard mash detection: a word is suspicious only if it is both long (18+ chars)
+        // AND vowel-poor (under 20%). The conjunction avoids flagging real long words
+        // (vowel-rich) or isolated foreign names (one odd word in normal text won't tip
+        // the proportion). Only applied when there are enough words to make the ratio meaningful.
+        string[] wordList = normalizedText.Split(' ');
+        if (wordList.Length >= 3)
+        {
+            int suspicious = 0;
+            foreach (string word in wordList)
+            {
+                if (word.Length < 18) continue;
+                int vowels = 0;
+                foreach (char c in word)
+                    if ("aeiouAEIOU".IndexOf(c) >= 0) vowels++;
+                if ((float)vowels / word.Length < 0.20f) suspicious++;
+            }
+            if ((float)suspicious / wordList.Length > 0.40f)
+                return true;
+        }
+
         return false;
     }
 
@@ -742,6 +789,9 @@ public class CreateNewStory : MonoBehaviour
         RefreshScreen3DeleteButton();
         if (screen2Canvas != null) screen2Canvas.SetActive(false);
         if (screen3Canvas != null) screen3Canvas.SetActive(true);
+        if (title != null && (string.IsNullOrWhiteSpace(title.text)
+            || string.Equals(title.text.Trim(), "ENTER TITLE", StringComparison.OrdinalIgnoreCase)))
+            title.ActivateInputField();
         RefreshReviewPhoto();
         RefreshStickerOverlay(StickerManager.CurrentPreviewStickerID);
     }
@@ -785,7 +835,44 @@ public class CreateNewStory : MonoBehaviour
     private void RefreshNoPhotoWarning()
     {
         if (noPhotoWarning == null) return;
-        noPhotoWarning.SetActive(photoManager == null || photoManager.CapturedPhoto == null);
+        bool hasPhoto = photoManager != null && photoManager.ActivePhotoTexture != null;
+        if (hasPhoto)
+        {
+            noPhotoWarning.SetActive(false);
+            _photoWarningShown = false;
+        }
+        else
+        {
+            noPhotoWarning.SetActive(_photoWarningShown);
+        }
+    }
+
+    // Wire to Screen 1 Next button instead of directly toggling the canvases
+    public void TryAdvanceFromScreen1()
+    {
+        bool hasPhoto = photoManager != null && photoManager.ActivePhotoTexture != null;
+        if (!hasPhoto && !_photoWarningShown)
+        {
+            _photoWarningShown = true;
+            RefreshNoPhotoWarning();
+            return;
+        }
+        if (screen1Canvas != null) screen1Canvas.SetActive(false);
+        if (screen2Canvas != null) screen2Canvas.SetActive(true);
+        RefreshCharacterCount();
+    }
+
+    // Wire to Screen 1 Save as Draft button instead of directly calling SaveLater
+    public void TrySaveDraftFromScreen1()
+    {
+        bool hasPhoto = photoManager != null && photoManager.ActivePhotoTexture != null;
+        if (!hasPhoto && !_photoWarningShown)
+        {
+            _photoWarningShown = true;
+            RefreshNoPhotoWarning();
+            return;
+        }
+        SaveLater();
     }
 
     private void RefreshScreen3DeleteButton()
@@ -1049,8 +1136,11 @@ public class CreateNewStory : MonoBehaviour
         ObjectManager.instance.createStoryPanel.SetActive(false);
         RefreshPostValidationUI();
 
-        MapInputController.instance?.SnapToMaxZoom();
-        MapLoader.instance?.resetScrollRect?.ResetToCentre();
+        if (_returnToMapOnFinish)
+        {
+            MapInputController.instance?.SnapToMaxZoom();
+            MapLoader.instance?.resetScrollRect?.ResetToCentre();
+        }
     }
 
     private void SetShareButtonLabel(string label)
@@ -1070,6 +1160,17 @@ public class CreateNewStory : MonoBehaviour
         }
 
         e.LastUpdated = System.DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+        bool wasDraft = e.IsLocalDraft;
+        e.IsLocalDraft = false;
+        if (wasDraft)
+        {
+            if (e.Created == 0) e.Created = System.DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            if (e.Expire  == 0) e.Expire  = StoryLifetimeManager.instance != null
+                ? StoryLifetimeManager.instance.GetInitialExpire()
+                : DateTimeOffset.UtcNow.AddDays(365).ToUnixTimeSeconds();
+        }
+        e.Tags?.Remove("draft");
 
         var newPhoto = photoManager?.CapturedPhoto;
         byte[] editJpeg = newPhoto != null ? newPhoto.EncodeToJPG(75) : null;

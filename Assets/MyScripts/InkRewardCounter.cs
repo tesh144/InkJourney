@@ -33,16 +33,25 @@ public class InkRewardCounter : MonoBehaviour
 
     [Header("Display")]
     public TextMeshProUGUI rewardText;
+    public Animator        rewardAnimator;
     public GameObject      updateIndicator;
     [SerializeField] float tickDelay    = 0.2f;
     [SerializeField] float tickDuration = 0.6f;
+    [SerializeField] float flashDuration = 0.5f;
 
     int _reward;
     int _displayed;
     int _stagedReward;
     Coroutine _tickCoroutine;
+    Coroutine _flashCoroutine;
+    Color _textDefaultColor;
 
     public int CurrentReward => _reward;
+
+    void Awake()
+    {
+        if (rewardText != null) _textDefaultColor = rewardText.color;
+    }
 
     void OnEnable()
     {
@@ -75,7 +84,10 @@ public class InkRewardCounter : MonoBehaviour
         if (newReward == _reward) return;
 
         int from = _displayed;
+        bool increased = newReward > _reward;
         _reward  = newReward;
+        if (increased && rewardAnimator != null) rewardAnimator.SetTrigger("pop");
+        StartFlash(increased ? Color.white : Color.red);
         if (updateIndicator != null) updateIndicator.SetActive(true);
         if (_tickCoroutine != null) StopCoroutine(_tickCoroutine);
         _tickCoroutine = StartCoroutine(Tick(from, newReward));
@@ -111,10 +123,32 @@ public class InkRewardCounter : MonoBehaviour
 
     public void ResetWithoutApplying()
     {
-        if (_tickCoroutine != null) { StopCoroutine(_tickCoroutine); _tickCoroutine = null; }
+        if (_tickCoroutine  != null) { StopCoroutine(_tickCoroutine);  _tickCoroutine  = null; }
+        if (_flashCoroutine != null) { StopCoroutine(_flashCoroutine); _flashCoroutine = null; }
         _reward    = 0;
         _displayed = 0;
-        if (rewardText != null) rewardText.text = Format(0);
+        if (rewardText != null) { rewardText.text = Format(0); rewardText.color = _textDefaultColor; }
+    }
+
+    void StartFlash(Color flashColor)
+    {
+        if (rewardText == null) return;
+        if (_flashCoroutine != null) StopCoroutine(_flashCoroutine);
+        _flashCoroutine = StartCoroutine(FlashRoutine(flashColor));
+    }
+
+    IEnumerator FlashRoutine(Color flashColor)
+    {
+        rewardText.color = flashColor;
+        float elapsed = 0f;
+        while (elapsed < flashDuration)
+        {
+            elapsed += Time.deltaTime;
+            rewardText.color = Color.Lerp(flashColor, _textDefaultColor, elapsed / flashDuration);
+            yield return null;
+        }
+        rewardText.color = _textDefaultColor;
+        _flashCoroutine  = null;
     }
 
     void UpdateDisplay(int value, bool animate)

@@ -41,6 +41,14 @@ public class ChapterObject : MonoBehaviour
 
     private void OnEnable()
     {
+        if (entry != null && !string.IsNullOrEmpty(entry.ID)
+            && GoogleSheetsFetcher.instance != null
+            && GoogleSheetsFetcher.instance.GetStoryById(entry.ID) == null)
+        {
+            Destroy(gameObject);
+            return;
+        }
+
         GPSManager.OnPositionSampled += RefreshDistance;
     }
 

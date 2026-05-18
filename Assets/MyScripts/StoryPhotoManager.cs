@@ -340,6 +340,13 @@ public class StoryPhotoManager : MonoBehaviour
         RenderTexture.active = prevRT;
         RenderTexture.ReleaseTemporary(rt);
 
+        // In the editor (OpenGL), ReadPixels from a RenderTexture is Y-flipped
+        // relative to the rendered result. On iOS (Metal) it is not — the shader's
+        // rotation steps already produce the correct orientation there.
+#if UNITY_EDITOR
+        CapturedPhoto = FlipVertical(CapturedPhoto);
+#endif
+
         if (_flashOn)
         {
             yield return new WaitForSeconds(0.2f);
@@ -481,6 +488,10 @@ public class StoryPhotoManager : MonoBehaviour
     public void DeletePhoto()
     {
         CapturedPhoto = null;
+        // Also clear any existing photo loaded from a URL so it doesn't reappear via ActivePhotoTexture
+        if (_existingPhotoTexture != null && _existingPhotoOwned) Destroy(_existingPhotoTexture);
+        _existingPhotoTexture = null;
+        _existingPhotoOwned   = false;
         photoPreview.texture = null;
         photoPreview.gameObject.SetActive(false);
         editDeleteButtons.SetActive(false);
