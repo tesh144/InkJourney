@@ -552,10 +552,17 @@ public class CreateNewStory : MonoBehaviour
             postBlockedReasonText.text = canPost ? string.Empty : postReason;
 
         if (screen3CompleteButton != null)
-            screen3CompleteButton.SetActive(canPost);
+        {
+            screen3CompleteButton.SetActive(true);
+            var btn = screen3CompleteButton.GetComponent<Button>();
+            if (btn != null) btn.interactable = canPost;
+        }
 
         if (screen3BlockedReasonText != null)
-            screen3BlockedReasonText.text = canPost ? string.Empty : postReason;
+        {
+            screen3BlockedReasonText.gameObject.SetActive(!canPost);
+            if (!canPost) screen3BlockedReasonText.text = postReason;
+        }
 
         bool canProceed = CanProceedFromScreen2(out string screen2Reason);
 
@@ -838,9 +845,10 @@ public class CreateNewStory : MonoBehaviour
     private void CaptureStickerPosition()
     {
         if (stickerOverlay == null || !stickerOverlay.gameObject.activeInHierarchy) return;
-        entry.StickerX     = stickerOverlay.NormalizedX;
-        entry.StickerY     = stickerOverlay.NormalizedY;
-        entry.StickerScale = stickerOverlay.Scale;
+        entry.StickerX        = stickerOverlay.NormalizedX;
+        entry.StickerY        = stickerOverlay.NormalizedY;
+        entry.StickerScale    = stickerOverlay.Scale;
+        entry.StickerRotation = stickerOverlay.Rotation;
     }
 
     private void RefreshStickerOverlay(int stickerID)
@@ -855,10 +863,11 @@ public class CreateNewStory : MonoBehaviour
         }
         Sprite sprite = StickerManager.instance.GetSticker(stickerID);
         bool isNewSticker = stickerID != _lastAppliedStickerID;
-        float nx = isNewSticker ? entry.StickerX : stickerOverlay.NormalizedX;
-        float ny = isNewSticker ? entry.StickerY : stickerOverlay.NormalizedY;
-        float sc = isNewSticker ? entry.StickerScale : stickerOverlay.Scale;
-        stickerOverlay.SetSticker(sprite, nx, ny, sc);
+        float nx = isNewSticker ? entry.StickerX        : stickerOverlay.NormalizedX;
+        float ny = isNewSticker ? entry.StickerY        : stickerOverlay.NormalizedY;
+        float sc = isNewSticker ? entry.StickerScale    : stickerOverlay.Scale;
+        float ro = isNewSticker ? entry.StickerRotation : stickerOverlay.Rotation;
+        stickerOverlay.SetSticker(sprite, nx, ny, sc, ro);
         _lastAppliedStickerID = stickerID;
     }
 

@@ -234,14 +234,16 @@ public class UI_StoryPanel : MonoBehaviour
         var parent = stickerRect.parent as RectTransform;
         if (parent == null) return;
 
-        float nx    = entry != null ? entry.StickerX     : 0.5f;
-        float ny    = entry != null ? entry.StickerY     : 0.5f;
-        float scale = entry != null ? entry.StickerScale : 1.0f;
+        float nx       = entry != null ? entry.StickerX        : 0.5f;
+        float ny       = entry != null ? entry.StickerY        : 0.5f;
+        float scale    = entry != null ? entry.StickerScale    : 1.0f;
+        float rotation = entry != null ? entry.StickerRotation : 0.0f;
 
         stickerRect.anchoredPosition = new Vector2(
             (nx - 0.5f) * parent.rect.width,
             (ny - 0.5f) * parent.rect.height);
-        stickerRect.localScale = new Vector3(scale, scale, 1f);
+        stickerRect.localScale       = new Vector3(scale, scale, 1f);
+        stickerRect.localEulerAngles = new Vector3(0f, 0f, rotation);
     }
 
     public void SetExpireDisplay(GoogleSheetsFetcher.Entry entry)

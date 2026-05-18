@@ -56,9 +56,10 @@ public class GoogleSheetsFetcher : MonoBehaviour
         public string PhotoUrl;
         public int StickerID;
         public int FontID;
-        public float StickerX     = 0.5f;
-        public float StickerY     = 0.5f;
-        public float StickerScale = 1.0f;
+        public float StickerX        = 0.5f;
+        public float StickerY        = 0.5f;
+        public float StickerScale    = 1.0f;
+        public float StickerRotation = 0.0f;
         public List<string> Tags = new List<string>();
         public List<Comment> Comments = new List<Comment>();
         public MapPointer pointer;
@@ -256,9 +257,10 @@ public class GoogleSheetsFetcher : MonoBehaviour
             PhotoUrl = GetString(data, "PhotoUrl"),
             StickerID = GetInt(data, "StickerID"),
             FontID = GetInt(data, "FontID"),
-            StickerX     = GetFloat(data, "StickerX",     0.5f),
-            StickerY     = GetFloat(data, "StickerY",     0.5f),
-            StickerScale = GetFloat(data, "StickerScale", 1.0f),
+            StickerX        = GetFloat(data, "StickerX",        0.5f),
+            StickerY        = GetFloat(data, "StickerY",        0.5f),
+            StickerScale    = GetFloat(data, "StickerScale",    1.0f),
+            StickerRotation = GetFloat(data, "StickerRotation", 0.0f),
             Tags = GetTags(data, "Tags"),
             Comments = GetComments(data, "Comments"),
             Views = GetInt(data, "Views"),
@@ -424,9 +426,10 @@ public class GoogleSheetsFetcher : MonoBehaviour
             { "Font", entry.Font ?? "" },
             { "FontID", entry.FontID },
             { "StickerID", entry.StickerID },
-            { "StickerX",     entry.StickerX },
-            { "StickerY",     entry.StickerY },
-            { "StickerScale", entry.StickerScale },
+            { "StickerX",        entry.StickerX },
+            { "StickerY",        entry.StickerY },
+            { "StickerScale",    entry.StickerScale },
+            { "StickerRotation", entry.StickerRotation },
             { "Saves", entry.Saves },
             { "SavedByUserIds", entry.SavedByUserIds ?? new List<string>() },
             { "LikesCount", entry.LikesCount },
@@ -698,9 +701,10 @@ public class GoogleSheetsFetcher : MonoBehaviour
             { "Font", entry.Font ?? "" },
             { "FontID", entry.FontID },
             { "StickerID", entry.StickerID },
-            { "StickerX",     entry.StickerX },
-            { "StickerY",     entry.StickerY },
-            { "StickerScale", entry.StickerScale },
+            { "StickerX",        entry.StickerX },
+            { "StickerY",        entry.StickerY },
+            { "StickerScale",    entry.StickerScale },
+            { "StickerRotation", entry.StickerRotation },
             { "Saves", entry.Saves },
             { "SavedByUserIds", entry.SavedByUserIds ?? new List<string>() },
             { "LikesCount", entry.LikesCount },

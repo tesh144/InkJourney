@@ -26,7 +26,7 @@ public static class LocalStoryStore
         public string ID, User, UserName, Title, Content, Theme, Track, Font, PhotoUrl;
         public float Latitude, Longitude;
         public int Saves, LikesCount, Views, StickerID, FontID;
-        public float StickerX = 0.5f, StickerY = 0.5f, StickerScale = 1.0f;
+        public float StickerX = 0.5f, StickerY = 0.5f, StickerScale = 1.0f, StickerRotation = 0.0f;
         public long Created, LastUpdated, Expire;
         public bool IsLocalDraft;
         public List<string> Tags           = new List<string>();
@@ -101,9 +101,10 @@ public static class LocalStoryStore
             Expire         = s.Expire,
             StickerID      = s.StickerID,
             FontID         = s.FontID,
-            StickerX       = s.StickerX,
-            StickerY       = s.StickerY,
-            StickerScale   = s.StickerScale,
+            StickerX        = s.StickerX,
+            StickerY        = s.StickerY,
+            StickerScale    = s.StickerScale,
+            StickerRotation = s.StickerRotation,
             Tags           = s.Tags            ?? new List<string>(),
             SavedByUserIds = s.SavedByUserIds  ?? new List<string>(),
             Comments       = ToLiveComments(s.Comments),
@@ -226,9 +227,10 @@ public static class LocalStoryStore
         Expire         = e.Expire,
         StickerID      = e.StickerID,
         FontID         = e.FontID,
-        StickerX       = e.StickerX,
-        StickerY       = e.StickerY,
-        StickerScale   = e.StickerScale,
+        StickerX        = e.StickerX,
+        StickerY        = e.StickerY,
+        StickerScale    = e.StickerScale,
+        StickerRotation = e.StickerRotation,
         Tags           = e.Tags            ?? new List<string>(),
         SavedByUserIds = e.SavedByUserIds  ?? new List<string>(),
         Comments       = ToStoredComments(e.Comments),

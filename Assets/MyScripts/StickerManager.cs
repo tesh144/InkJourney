@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using TMPro;
 using UnityEngine;
+using UnityEngine.Events;
 using UnityEngine.UI;
 #if UNITY_EDITOR
 using Sirenix.OdinInspector;
@@ -17,6 +19,14 @@ public class StickerManager : MonoBehaviour
     public static event Action<int> OnPreviewStickerChanged;
 
     public static int CurrentPreviewStickerID { get; private set; } = 0;
+
+    [Header("Events")]
+    public UnityEvent onStickerSelected;
+
+    [Header("UI")]
+    public TMP_Text stickerPromptText;
+    public string noStickerLabel     = "Add a sticker to your story";
+    public string hasStickerLabel    = "Change your sticker";
 
 #if UNITY_EDITOR
     public RectTransform stickerButtonContainer;
@@ -89,10 +99,19 @@ public class StickerManager : MonoBehaviour
     {
         CurrentPreviewStickerID = stickerID;
         OnPreviewStickerChanged?.Invoke(stickerID);
+        if (stickerID > 0) instance?.onStickerSelected?.Invoke();
+        instance?.RefreshPromptText();
     }
 
     public static void ResetPreviewSticker()
     {
         CurrentPreviewStickerID = 0;
+        instance?.RefreshPromptText();
+    }
+
+    private void RefreshPromptText()
+    {
+        if (stickerPromptText == null) return;
+        stickerPromptText.text = CurrentPreviewStickerID > 0 ? hasStickerLabel : noStickerLabel;
     }
 }

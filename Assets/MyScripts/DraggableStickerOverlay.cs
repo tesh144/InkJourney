@@ -16,6 +16,8 @@ public class DraggableStickerOverlay : MonoBehaviour, IPointerDownHandler, IPoin
     private bool  isPinching;
     private float pinchStartDistance;
     private float pinchStartScale;
+    private float pinchStartAngle;
+    private float pinchStartRotation;
 
     private void Awake() => EnsureInit();
 
@@ -28,7 +30,7 @@ public class DraggableStickerOverlay : MonoBehaviour, IPointerDownHandler, IPoin
         if (image != null) image.raycastTarget = true;
     }
 
-    public void SetSticker(Sprite sprite, float normalizedX = 0.5f, float normalizedY = 0.5f, float scale = 1.0f)
+    public void SetSticker(Sprite sprite, float normalizedX = 0.5f, float normalizedY = 0.5f, float scale = 1.0f, float rotation = 0f)
     {
         EnsureInit();
         image.sprite = sprite;
@@ -36,7 +38,8 @@ public class DraggableStickerOverlay : MonoBehaviour, IPointerDownHandler, IPoin
         if (sprite != null)
         {
             ApplyNormalized(normalizedX, normalizedY);
-            rt.localScale = new Vector3(scale, scale, 1f);
+            rt.localScale       = new Vector3(scale, scale, 1f);
+            rt.localEulerAngles = new Vector3(0f, 0f, rotation);
         }
     }
 
@@ -50,6 +53,7 @@ public class DraggableStickerOverlay : MonoBehaviour, IPointerDownHandler, IPoin
     public float NormalizedX { get { EnsureInit(); return ToNormalized(rt.anchoredPosition.x, parentRect != null ? parentRect.rect.width  : 1f); } }
     public float NormalizedY { get { EnsureInit(); return ToNormalized(rt.anchoredPosition.y, parentRect != null ? parentRect.rect.height : 1f); } }
     public float Scale       { get { EnsureInit(); return rt != null ? rt.localScale.x : 1f; } }
+    public float Rotation    { get { EnsureInit(); return rt != null ? rt.localEulerAngles.z : 0f; } }
 
     public void OnPointerDown(PointerEventData eventData) => isPointerDown = true;
 
@@ -87,18 +91,24 @@ public class DraggableStickerOverlay : MonoBehaviour, IPointerDownHandler, IPoin
 
         float currentDist = Vector2.Distance(Input.GetTouch(0).position, Input.GetTouch(1).position);
 
+        Vector2 touchDelta   = Input.GetTouch(1).position - Input.GetTouch(0).position;
+        float   currentAngle = Mathf.Atan2(touchDelta.y, touchDelta.x) * Mathf.Rad2Deg;
+
         if (!isPinching)
         {
-            isPinching        = true;
+            isPinching         = true;
             pinchStartDistance = currentDist;
             pinchStartScale    = rt.localScale.x;
+            pinchStartAngle    = currentAngle;
+            pinchStartRotation = rt.localEulerAngles.z;
             return;
         }
 
         if (pinchStartDistance <= 0f) return;
 
         float scale = Mathf.Clamp(pinchStartScale * (currentDist / pinchStartDistance), minScale, maxScale);
-        rt.localScale = new Vector3(scale, scale, 1f);
+        rt.localScale       = new Vector3(scale, scale, 1f);
+        rt.localEulerAngles = new Vector3(0f, 0f, pinchStartRotation + (currentAngle - pinchStartAngle));
     }
 
     private void ApplyNormalized(float nx, float ny)
