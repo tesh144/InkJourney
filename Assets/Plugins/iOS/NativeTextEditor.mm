@@ -30,8 +30,10 @@ static const CGFloat kTitleFontSize   = 24.0;
     int                         _baseReward;
     int                         _titleReward;
     int                         _minTitleLength;
+    int                         _maxCharacters;
     NSArray<NSArray<NSNumber *> *> *_wordThresholds;
     UILabel                    *_rewardLabel;
+    UILabel                    *_charCountLabel;
 }
 
 + (instancetype)shared {
@@ -45,13 +47,14 @@ static const CGFloat kTitleFontSize   = 24.0;
 
 - (void)showWithTitle:(NSString *)title content:(NSString *)content
            baseReward:(int)baseReward titleReward:(int)titleReward
-       minTitleLength:(int)minTitleLength thresholds:(NSString *)thresholds {
+       minTitleLength:(int)minTitleLength maxCharacters:(int)maxCharacters thresholds:(NSString *)thresholds {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (self->_container) return;
 
         self->_baseReward     = baseReward;
         self->_titleReward    = titleReward;
         self->_minTitleLength = minTitleLength;
+        self->_maxCharacters  = maxCharacters;
 
         NSMutableArray *parsed = [NSMutableArray new];
         NSArray<NSString *> *parts = [thresholds componentsSeparatedByString:@","];
@@ -138,6 +141,15 @@ static const CGFloat kTitleFontSize   = 24.0;
         cancelBtn.titleLabel.font = [UIFont systemFontOfSize:16];
         [cancelBtn addTarget:self action:@selector(onCancel) forControlEvents:UIControlEventTouchUpInside];
         [navBar addSubview:cancelBtn];
+
+        // Character count — centred in nav bar
+        CGFloat ccW = 80;
+        self->_charCountLabel = [[UILabel alloc] initWithFrame:
+            CGRectMake((screen.size.width - ccW) / 2, safe.top, ccW, kNavBarHeight)];
+        self->_charCountLabel.textAlignment = NSTextAlignmentCenter;
+        self->_charCountLabel.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightRegular];
+        self->_charCountLabel.textColor = secondaryText;
+        [navBar addSubview:self->_charCountLabel];
 
         // Done
         UIButton *doneBtn = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -328,12 +340,14 @@ static const CGFloat kTitleFontSize   = 24.0;
     UIBarButtonItem *flex = [[UIBarButtonItem alloc]
         initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
 
-    _rewardLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 72, 44)];
-    _rewardLabel.textAlignment = NSTextAlignmentRight;
-    _rewardLabel.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightMedium];
-    _rewardLabel.textColor = _hasCameraBackground
+    UIColor *toolbarTextColor = _hasCameraBackground
         ? [UIColor colorWithWhite:1 alpha:0.75]
         : [UIColor secondaryLabelColor];
+
+    _rewardLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 148, 44)];
+    _rewardLabel.textAlignment = NSTextAlignmentRight;
+    _rewardLabel.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightMedium];
+    _rewardLabel.textColor = toolbarTextColor;
     UIBarButtonItem *rewardItem = [[UIBarButtonItem alloc] initWithCustomView:_rewardLabel];
 
     bar.items = @[bold, italic, underline, bullet, flex, rewardItem];
@@ -468,15 +482,25 @@ static const CGFloat kTitleFontSize   = 24.0;
 }
 
 - (void)updateRewardLabel {
+    NSString *text = _textView ? _textView.text : @"";
+
+    if (_charCountLabel && _maxCharacters > 0) {
+        int charCount = (int)text.length;
+        _charCountLabel.text = [NSString stringWithFormat:@"%d/%d", charCount, _maxCharacters];
+        _charCountLabel.textColor = charCount > _maxCharacters
+            ? [UIColor systemRedColor]
+            : (_hasCameraBackground ? [UIColor colorWithWhite:1 alpha:0.75] : [UIColor secondaryLabelColor]);
+    }
+
     if (!_rewardLabel) return;
     int wordReward = 0;
-    int words = [self countWords:_textView ? _textView.text : @""];
+    int words = [self countWords:text];
     for (NSArray<NSNumber *> *tier in _wordThresholds)
         if (words >= tier[0].intValue && tier[1].intValue > wordReward)
             wordReward = tier[1].intValue;
     int titleBonus = [self isTitleValid:_titleField ? _titleField.text : @""] ? _titleReward : 0;
     int total = _baseReward + titleBonus + wordReward;
-    _rewardLabel.text = [NSString stringWithFormat:@"+%d ink", total];
+    _rewardLabel.text = [NSString stringWithFormat:@"You'll earn +%d ink", total];
 }
 
 // ── UITextViewDelegate ────────────────────────────────────────────────────────
@@ -530,6 +554,7 @@ static const CGFloat kTitleFontSize   = 24.0;
             self->_textView            = nil;
             self->_titleField          = nil;
             self->_rewardLabel         = nil;
+            self->_charCountLabel      = nil;
             self->_wordThresholds      = nil;
             self->_hasCameraBackground = NO;
         }];
@@ -580,13 +605,13 @@ static const CGFloat kTitleFontSize   = 24.0;
 extern "C" {
 
 void NativeTextEditor_Show(const char *title, const char *content, const char *placeholder,
-                           int baseReward, int titleReward, int minTitleLength, const char *thresholds) {
+                           int baseReward, int titleReward, int minTitleLength, int maxCharacters, const char *thresholds) {
     NSString *t  = title      ? [NSString stringWithUTF8String:title]      : @"";
     NSString *c  = content    ? [NSString stringWithUTF8String:content]    : @"";
     NSString *th = thresholds ? [NSString stringWithUTF8String:thresholds] : @"";
     [[NativeTextEditorController shared] showWithTitle:t content:c
                                            baseReward:baseReward titleReward:titleReward
-                                       minTitleLength:minTitleLength thresholds:th];
+                                       minTitleLength:minTitleLength maxCharacters:maxCharacters thresholds:th];
 }
 
 void NativeTextEditor_Hide() {

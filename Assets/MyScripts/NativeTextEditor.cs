@@ -51,6 +51,7 @@ public class NativeTextEditor : MonoBehaviour
                             int baseReward                    = 0,
                             int titleReward                   = 0,
                             int minTitleLength                = 0,
+                            int maxCharacters                 = 0,
                             string rewardThresholds           = "")
     {
         if (instance == null) { Debug.LogError("[NativeTextEditor] No instance."); return; }
@@ -68,6 +69,7 @@ public class NativeTextEditor : MonoBehaviour
             baseReward,
             titleReward,
             minTitleLength,
+            maxCharacters,
             rewardThresholds);
 #else
         // Editor fallback — activate content field directly
@@ -100,7 +102,7 @@ public class NativeTextEditor : MonoBehaviour
     // ─── Native bindings ─────────────────────────────────────────────────────
 
 #if UNITY_IOS && !UNITY_EDITOR
-    [DllImport("__Internal")] static extern void NativeTextEditor_Show(string title, string content, string placeholder, int baseReward, int titleReward, int minTitleLength, string thresholds);
+    [DllImport("__Internal")] static extern void NativeTextEditor_Show(string title, string content, string placeholder, int baseReward, int titleReward, int minTitleLength, int maxCharacters, string thresholds);
     [DllImport("__Internal")] static extern void NativeTextEditor_Hide();
     [DllImport("__Internal")] static extern void NativeTextEditor_Prewarm();
     [DllImport("__Internal")] static extern void NativeTextEditor_StopPrewarm();

@@ -273,6 +273,7 @@ public class CreateNewStory : MonoBehaviour
             baseReward:       CalculateBaseRewardWithoutTitle(),
             titleReward:      inkRewardCounter != null ? inkRewardCounter.titleReward : 0,
             minTitleLength:   validationMessages.minTitleLength,
+            maxCharacters:    validationMessages.maxContentLength,
             rewardThresholds: BuildThresholdsString()
         );
     }
@@ -546,17 +547,17 @@ public class CreateNewStory : MonoBehaviour
         bool canPost = CanPost(out string postReason);
 
         if (postButton != null)
-            postButton.SetActive(canPost);
+        {
+            postButton.SetActive(true);
+            var postBtn = postButton.GetComponent<Button>();
+            if (postBtn != null) postBtn.interactable = canPost;
+        }
 
         if (postBlockedReasonText != null)
             postBlockedReasonText.text = canPost ? string.Empty : postReason;
 
         if (screen3CompleteButton != null)
-        {
-            screen3CompleteButton.SetActive(true);
-            var btn = screen3CompleteButton.GetComponent<Button>();
-            if (btn != null) btn.interactable = canPost;
-        }
+            screen3CompleteButton.SetActive(canPost);
 
         if (screen3BlockedReasonText != null)
         {
@@ -581,17 +582,7 @@ public class CreateNewStory : MonoBehaviour
             editLaterButton.SetActive(canSaveDraft);
     }
 
-    private string GetUserContent()
-    {
-        string text = content != null ? content.text : string.Empty;
-        if (InspirationPanel.instance != null)
-        {
-            int idx = InspirationPanel.instance.PromptInsertIndex;
-            if (idx >= 0 && idx <= text.Length)
-                text = text.Substring(0, idx);
-        }
-        return text;
-    }
+    private string GetUserContent() => content?.text ?? string.Empty;
 
     private bool CanProceedFromScreen2(out string reason)
     {
@@ -1112,9 +1103,9 @@ public class CreateNewStory : MonoBehaviour
         // Spawn pin immediately — visible feedback before upload finishes
         GoogleSheetsFetcher.instance.SpawnNewMapPointer(postEntry);
 
-        // Queue reward into InkManager before FinishPost clears the form
+        // Apply reward before FinishPost resets the counter
         if (inkRewardCounter != null && !isEditMode)
-            InkManager.instance?.QueueGain(inkRewardCounter.CurrentReward);
+            InkManager.instance?.ApplyWithDelay(inkRewardCounter.CurrentReward);
         inkRewardCounter?.ResetWithoutApplying();
 
         FinishPost();
