@@ -1,4 +1,5 @@
 using System.Collections;
+using TMPro;
 using UnityEngine;
 
 public class CollectibleGoldenQuill : MonoBehaviour
@@ -11,6 +12,8 @@ public class CollectibleGoldenQuill : MonoBehaviour
     float         _collectRadiusMetres;
     bool          _collected;
 
+    public TMP_Text rewardLabel;
+
     void Awake() => _rt = GetComponent<RectTransform>();
 
     public void Initialise(float lat, float lon, RectTransform counterTarget, float collectRadius)
@@ -19,6 +22,7 @@ public class CollectibleGoldenQuill : MonoBehaviour
         Longitude            = lon;
         _quillCounterTarget  = counterTarget;
         _collectRadiusMetres = collectRadius;
+        if (rewardLabel != null) rewardLabel.text = "+1";
         UpdatePosition();
     }
 

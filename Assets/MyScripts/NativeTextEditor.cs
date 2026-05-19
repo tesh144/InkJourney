@@ -62,8 +62,11 @@ public class NativeTextEditor : MonoBehaviour
         instance._onCancel     = onCancel;
 
 #if UNITY_IOS && !UNITY_EDITOR
+        string titleText = titleField?.text ?? "";
+        if (string.Equals(titleText.Trim(), "ENTER TITLE", StringComparison.OrdinalIgnoreCase))
+            titleText = "";
         NativeTextEditor_Show(
-            titleField?.text   ?? "",
+            titleText,
             contentField?.text ?? "",
             placeholder,
             baseReward,

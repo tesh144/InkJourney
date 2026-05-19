@@ -45,6 +45,7 @@ public class CreateNewStory : MonoBehaviour
     private bool _returnToMapOnFinish = false;
     private bool _photoWarningShown = false;
     private bool _screen2Touched = false;
+    private bool _screen3Touched = false;
     private Color _characterCountDefaultColor;
     private int _lastAppliedStickerID = -1;
     private Coroutine _reviewPhotoCoroutine;
@@ -113,7 +114,11 @@ public class CreateNewStory : MonoBehaviour
         RefreshTagButtonStates();
 
         if (title != null)
+        {
             title.onValueChanged.AddListener(_ => { entry.Title = title.text; RefreshPostValidationUI(); RecalculateInkReward(); });
+            title.onSelect.AddListener(_ => { if (title.text.Trim().Equals("ENTER TITLE", StringComparison.OrdinalIgnoreCase)) title.text = string.Empty; });
+            title.onDeselect.AddListener(_ => { if (string.IsNullOrWhiteSpace(title.text)) title.text = "ENTER TITLE"; });
+        }
         if (content != null)
             content.onValueChanged.AddListener(_ => { _screen2Touched = true; entry.Content = content.text; RefreshPostValidationUI(); RecalculateInkReward(); RefreshCharacterCount(); });
 
@@ -170,6 +175,7 @@ public class CreateNewStory : MonoBehaviour
         _returnToMapOnFinish    = false;
         _photoWarningShown      = false;
         _screen2Touched         = false;
+        _screen3Touched         = false;
         hasEditOriginalLocation = false;
         _lastAppliedStickerID   = -1;
         if (inkRewardCounter != null) inkRewardCounter.gameObject.SetActive(true);
@@ -271,10 +277,10 @@ public class CreateNewStory : MonoBehaviour
                 RefreshReviewContent();
             },
             baseReward:       CalculateBaseRewardWithoutTitle(),
-            titleReward:      inkRewardCounter != null ? inkRewardCounter.titleReward : 0,
+            titleReward:      (!isEditMode || entry.IsLocalDraft) && inkRewardCounter != null ? inkRewardCounter.titleReward : 0,
             minTitleLength:   validationMessages.minTitleLength,
             maxCharacters:    validationMessages.maxContentLength,
-            rewardThresholds: BuildThresholdsString()
+            rewardThresholds: (!isEditMode || entry.IsLocalDraft) ? BuildThresholdsString() : string.Empty
         );
     }
 
@@ -451,6 +457,7 @@ public class CreateNewStory : MonoBehaviour
         SyncSelectedTagsToEntry();
         TagManager.instance?.UpdateStoryTagCount(selectedTagIds.Count);
         RefreshTagButtonStates();
+        _screen3Touched = true;
         RefreshPostValidationUI();
         RecalculateInkReward();
     }
@@ -561,8 +568,9 @@ public class CreateNewStory : MonoBehaviour
 
         if (screen3BlockedReasonText != null)
         {
-            screen3BlockedReasonText.gameObject.SetActive(!canPost);
-            if (!canPost) screen3BlockedReasonText.text = postReason;
+            bool showReason = _screen3Touched && !canPost;
+            screen3BlockedReasonText.gameObject.SetActive(showReason);
+            if (showReason) screen3BlockedReasonText.text = postReason;
         }
 
         bool canProceed = CanProceedFromScreen2(out string screen2Reason);
@@ -815,8 +823,9 @@ public class CreateNewStory : MonoBehaviour
 
         RefreshReviewContent();
         RefreshScreen3DeleteButton();
-        if (screen2Canvas != null) screen2Canvas.SetActive(false);
+        _screen3Touched = false;
         if (screen3Canvas != null) screen3Canvas.SetActive(true);
+        if (screen2Canvas != null) screen2Canvas.SetActive(false);
         if (title != null && (string.IsNullOrWhiteSpace(title.text)
             || string.Equals(title.text.Trim(), "ENTER TITLE", StringComparison.OrdinalIgnoreCase)))
             title.ActivateInputField();

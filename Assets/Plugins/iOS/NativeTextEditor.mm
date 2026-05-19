@@ -8,6 +8,7 @@ static const CGFloat kTitleHeight     = 52.0;
 static const CGFloat kDividerHeight   = 0.5;
 static const CGFloat kBodyFontSize    = 17.0;
 static const CGFloat kTitleFontSize   = 24.0;
+static const CGFloat kHorizMargin     = 28.0;
 
 // ─────────────────────────────────────────────────────────────────────────────
 @interface NativeTextEditorController : NSObject <UITextViewDelegate, UITextFieldDelegate>
@@ -164,7 +165,7 @@ static const CGFloat kTitleFontSize   = 24.0;
 
         // ── Title field ────────────────────────────────────────────────────
         CGFloat titleY = navH + 10;
-        self->_titleField = [[UITextField alloc] initWithFrame:CGRectMake(20, titleY, screen.size.width - 40, kTitleHeight)];
+        self->_titleField = [[UITextField alloc] initWithFrame:CGRectMake(kHorizMargin, titleY, screen.size.width - kHorizMargin * 2, kTitleHeight)];
         self->_titleField.text              = title;
         self->_titleField.font              = [UIFont boldSystemFontOfSize:kTitleFontSize];
         self->_titleField.textColor         = primaryText;
@@ -182,14 +183,14 @@ static const CGFloat kTitleFontSize   = 24.0;
 
         // ── Divider ────────────────────────────────────────────────────────
         CGFloat dividerY = titleY + kTitleHeight + 6;
-        UIView *divider = [[UIView alloc] initWithFrame:CGRectMake(20, dividerY, screen.size.width - 40, kDividerHeight)];
+        UIView *divider = [[UIView alloc] initWithFrame:CGRectMake(kHorizMargin, dividerY, screen.size.width - kHorizMargin * 2, kDividerHeight)];
         divider.backgroundColor = separatorColor;
         [self->_container addSubview:divider];
 
         // ── Body text view ─────────────────────────────────────────────────
         CGFloat bodyY = dividerY + kDividerHeight + 12;
         self->_textView = [[UITextView alloc] initWithFrame:
-            CGRectMake(20, bodyY, screen.size.width - 40, screen.size.height - bodyY - safe.bottom)];
+            CGRectMake(kHorizMargin, bodyY, screen.size.width - kHorizMargin * 2, screen.size.height - bodyY - safe.bottom)];
         self->_textView.backgroundColor         = [UIColor clearColor];
         self->_textView.textColor               = primaryText;
         self->_textView.font                    = self->_bodyFont;
@@ -500,6 +501,7 @@ static const CGFloat kTitleFontSize   = 24.0;
             wordReward = tier[1].intValue;
     int titleBonus = [self isTitleValid:_titleField ? _titleField.text : @""] ? _titleReward : 0;
     int total = _baseReward + titleBonus + wordReward;
+
     _rewardLabel.text = [NSString stringWithFormat:@"You'll earn +%d ink", total];
 }
 

@@ -1,4 +1,5 @@
 using System.Collections;
+using TMPro;
 using UnityEngine;
 
 public class CollectibleInk : MonoBehaviour
@@ -6,19 +7,24 @@ public class CollectibleInk : MonoBehaviour
     public float Latitude  { get; private set; }
     public float Longitude { get; private set; }
 
+    public TMP_Text rewardLabel;
+
     RectTransform _rt;
     RectTransform _inkCounterTarget;
     float         _collectRadiusMetres;
+    int           _inkAmount;
     bool          _collected;
 
     void Awake() => _rt = GetComponent<RectTransform>();
 
-    public void Initialise(float lat, float lon, RectTransform inkTarget, float collectRadius)
+    public void Initialise(float lat, float lon, RectTransform inkTarget, float collectRadius, int minInk = 5, int maxInk = 15)
     {
         Latitude             = lat;
         Longitude            = lon;
         _inkCounterTarget    = inkTarget;
         _collectRadiusMetres = collectRadius;
+        _inkAmount           = Random.Range(minInk, Mathf.Max(maxInk, minInk) + 1);
+        if (rewardLabel != null) rewardLabel.text = $"+{_inkAmount}";
         RelocateIfNeeded();
         UpdatePosition();
     }
@@ -139,7 +145,7 @@ public class CollectibleInk : MonoBehaviour
             yield return null;
         }
 
-        InkManager.instance?.AddInk(Random.Range(1, 6));
+        InkManager.instance?.AddInk(_inkAmount);
         Destroy(gameObject);
     }
 }

@@ -19,6 +19,8 @@ public class CollectibleInkSpawner : MonoBehaviour
     public float spawnRadiusKm       = 3f;
     public float collectRadiusMetres = 50f;
     public float minSpacingMetres    = 200f;
+    public int   minInkReward        = 5;
+    public int   maxInkReward        = 15;
 
     [Header("Golden Quill (Rare Weekly)")]
     public GameObject    goldenQuillPrefab;
@@ -261,7 +263,7 @@ public class CollectibleInkSpawner : MonoBehaviour
             var go  = Instantiate(collectibleInkPrefab, mapParent);
             var ink = go.GetComponent<CollectibleInk>();
             if (ink == null) continue;
-            ink.Initialise(pos.x, pos.y, inkCounterTarget, collectRadiusMetres);
+            ink.Initialise(pos.x, pos.y, inkCounterTarget, collectRadiusMetres, minInkReward, maxInkReward);
             _spawned.Add(ink);
         }
     }

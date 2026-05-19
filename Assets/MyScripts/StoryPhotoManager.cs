@@ -250,10 +250,8 @@ public class StoryPhotoManager : MonoBehaviour
         }
         usingFrontCamera = foundFront;
 
-        // Torch only works on back camera — hide button when using front
         NativeCameraFlash.SetTorch(false);
-        bool hasFlash = !usingFrontCamera && NativeCameraFlash.HasTorch();
-        if (flashButton != null) flashButton.SetActive(hasFlash);
+        if (flashButton != null) flashButton.SetActive(!usingFrontCamera);
         SetFlash(false);
 
         cameraFeed.rectTransform.localEulerAngles = Vector3.zero;
@@ -459,6 +457,7 @@ public class StoryPhotoManager : MonoBehaviour
     {
         SetFlash(false);
         NativeCameraFlash.SetTorch(false);
+        usingFrontCamera = false;
         if (webCamTexture != null)
         {
             webCamTexture.Stop();
