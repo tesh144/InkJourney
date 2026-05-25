@@ -277,8 +277,10 @@ public class UI_StoryPanel : MonoBehaviour
     public void DeleteBoundStory()
     {
         if (BoundEntry == null) return;
+        string storyId = BoundEntry.ID;
         gameObject.SetActive(false);
         GoogleSheetsFetcher.instance.DeleteEntryFromFirestore(BoundEntry);
+        JourneyManager.instance?.RemoveStoryFromAllJourneys(storyId);
     }
 
     public void SetTags(IEnumerable<string> tagIds)

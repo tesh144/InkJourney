@@ -151,6 +151,8 @@ public class JourneyManager : MonoBehaviour
         JourneyLibraryPanel.instance?.PopulateJourneysList();
         if (!wasEdit)
             ActivateJourney(j, showPopup: false);
+        else
+            GoogleSheetsFetcher.instance?.RefreshMap();
     }
 
     public void CancelCreatingJourney()
@@ -159,10 +161,10 @@ public class JourneyManager : MonoBehaviour
         StopCreationTracking();
         if (_isEditMode)
         {
-            // Editing an existing journey — just exit, don't delete anything
             _isEditMode       = false;
             isCreatingJourney = false;
             creatingJourney   = null;
+            GoogleSheetsFetcher.instance?.RefreshMap();
             return;
         }
         PlayerPrefs.DeleteKey("Journey.CreatingId");
@@ -186,16 +188,20 @@ public class JourneyManager : MonoBehaviour
 
         string userId = UserProfileManager.instance?.UserId;
 
-        // Delete owned stories contained in the journey
+        // Delete owned stories and immediately hide all chapter pins
         var fetcher = GoogleSheetsFetcher.instance;
         if (fetcher != null && journey.Chapters != null)
         {
             foreach (var chapter in journey.Chapters)
             {
                 if (string.IsNullOrEmpty(chapter.StoryId)) continue;
-                var story = fetcher.storiesList?.Find(e => e?.ID == chapter.StoryId);
-                if (story != null && story.User == userId)
+                var story = fetcher.storiesList?.Find(e => e?.ID == chapter.StoryId)
+                         ?? fetcher.landmarksList?.Find(e => e?.ID == chapter.StoryId);
+                if (story == null) continue;
+                if (story.User == userId)
                     fetcher.DeleteEntryFromFirestore(story);
+                else if (story.pointer != null)
+                    story.pointer.gameObject.SetActive(false);
             }
         }
 
@@ -241,6 +247,38 @@ public class JourneyManager : MonoBehaviour
         GoogleSheetsFetcher.instance?.RefreshMap();
     }
 
+    /// Called after any story is deleted. Removes the story from every journey's
+    /// chapter list locally and in Firestore, then refreshes the map.
+    public void RemoveStoryFromAllJourneys(string storyId)
+    {
+        if (string.IsNullOrEmpty(storyId)) return;
+
+        string userId  = UserProfileManager.instance?.UserId;
+        var journeys   = GoogleSheetsFetcher.instance?.journeysList;
+        if (journeys == null) return;
+
+        bool mapDirty = false;
+
+        foreach (var journey in journeys)
+        {
+            if (journey?.Chapters == null) continue;
+            int removed = journey.Chapters.RemoveAll(c => c.StoryId == storyId);
+            if (removed == 0) continue;
+
+            // Re-sequence Order so Order==0 always identifies the first chapter
+            for (int i = 0; i < journey.Chapters.Count; i++)
+                journey.Chapters[i].Order = i;
+
+            mapDirty = true;
+
+            if (!string.IsNullOrEmpty(userId) && journey.User == userId)
+                SaveJourneyToFirestore(journey);
+        }
+
+        if (mapDirty)
+            GoogleSheetsFetcher.instance?.RefreshMap();
+    }
+
     private void StopCreationTracking()
     {
         MapLoader.onStyleChanged     -= OnCreationStyleChanged;
@@ -255,7 +293,7 @@ public class JourneyManager : MonoBehaviour
 
     private void OnCreationGpsSampled(float lat, float lon)
     {
-        if (!isCreatingJourney) return;
+        if (!isCreatingJourney || _isEditMode) return;
         if (DistMetres(lat, lon, _creationStartLat, _creationStartLon) > creationDistanceLimitMetres)
         {
             onJourneyCreationDistanceLimitReached?.Invoke();
@@ -305,8 +343,6 @@ public class JourneyManager : MonoBehaviour
     private Coroutine _routeCoroutine;
     private Coroutine _progressLoadCoroutine;
 
-    private readonly List<MapPointer> spawnedChapterPointers = new List<MapPointer>();
-
     private const string PrefKeyActiveId = "Journey.ActiveId";
     private const string PrefKeyPrevStyle = "Journey.PrevStyleIndex";
     private const string PrefKeyProgressPfx = "Journey.Progress.";
@@ -341,8 +377,6 @@ public class JourneyManager : MonoBehaviour
         if (MapLoader.instance != null && MapLoader.instance.currentStyleIndex != journey.MapStyleIndex)
             MapLoader.instance.ChooseStyle(journey.MapStyleIndex);
 
-        SpawnChapterPointers();
-
         if (!progressCache.ContainsKey(journey.ID))
         {
             var prefsProgress = LoadProgressFromPrefs(journey.ID);
@@ -374,6 +408,7 @@ public class JourneyManager : MonoBehaviour
                 return;
 
             mapJourneyCard?.RefreshProgress();
+            JourneyLibraryPanel.instance?.RefreshJourneyProgress();
             DrawJourneyRoute();
             GoogleSheetsFetcher.instance?.RefreshMap();
         }));
@@ -401,7 +436,6 @@ public class JourneyManager : MonoBehaviour
         if (MapLoader.instance != null && MapLoader.instance.currentStyleIndex != prevStyle)
             MapLoader.instance.ChooseStyle(prevStyle);
 
-        ClearChapterPointers();
         ClearRoute();
 
         if (mapJourneyCard != null)
@@ -606,14 +640,15 @@ public class JourneyManager : MonoBehaviour
     public float GetProgressPercent(string journeyId)
     {
         var journey = GoogleSheetsFetcher.instance?.journeysList?.Find(j => j != null && j.ID == journeyId);
+        if (journey?.Chapters == null) return 0f;
 
-        if (journey == null || journey.Chapters == null || journey.Chapters.Count == 0)
-            return 0f;
+        int total = journey.Chapters.FindAll(c => !string.IsNullOrEmpty(c.StoryId)).Count;
+        if (total == 0) return 0f;
 
         if (!progressCache.TryGetValue(journeyId, out var completed))
             return 0f;
 
-        return (float)completed.Count / journey.Chapters.Count;
+        return Mathf.Min(1f, (float)completed.Count / total);
     }
 
     public List<string> GetCompletedChapterIds(string journeyId)
@@ -648,8 +683,8 @@ public class JourneyManager : MonoBehaviour
                 if (!string.IsNullOrEmpty(currentUserId) && journey.User == currentUserId)
                     return true;
 
-                // Other journeys: first story always visible for discovery
-                if (chapter.Order == 0)
+                // Other journeys: first story always visible for discovery (not for drafts)
+                if (chapter.Order == 0 && !journey.Draft)
                     return true;
 
                 // Other journeys: completed chapters + next-in-chain visible when journey is active
@@ -866,6 +901,12 @@ public class JourneyManager : MonoBehaviour
                 routePoints.Add((story.Latitude, story.Longitude));
         }
 
+        // Mapbox Directions API hard limit is 25 waypoints.
+        // Trim the oldest completed stops from the trail if over limit (keep player + target).
+        const int MapboxMaxWaypoints = 25;
+        while (routePoints.Count > MapboxMaxWaypoints - 2)
+            routePoints.RemoveAt(0);
+
         int playerIdx = routePoints.Count;
 
         routePoints.Add((GPSManager.Instance.latitude, GPSManager.Instance.longitude));
@@ -971,16 +1012,6 @@ public class JourneyManager : MonoBehaviour
 
         MapRouteManager.instance?.ClearJourneyRoute();
         MapRouteManager.instance?.ClearJourneyTrail();
-    }
-
-    private void SpawnChapterPointers()
-    {
-        spawnedChapterPointers.Clear();
-    }
-
-    private void ClearChapterPointers()
-    {
-        spawnedChapterPointers.Clear();
     }
 
     private void PersistProgressToFirestore(string journeyId, List<string> completedChapterIds)

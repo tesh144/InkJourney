@@ -56,6 +56,10 @@ public class MapLoader : MonoBehaviour
     public int currentStyleIndex = 0;
     [Tooltip("Show road/street name labels on the map")]
     public bool showStreetNames = false;
+#if UNITY_EDITOR
+    [Tooltip("When enabled, tapping an expanded map pointer opens it in the story editor instead of the read view.")]
+    public bool debugEditOnSelect = false;
+#endif
     [Tooltip("0 = pointers scale with the map, 1 = fixed screen size, values between blend the two")]
     [Range(0f, 1f)] public float pointerCounterScale = 1f;
     [Tooltip("0 = compass scales with the map, 1 = fixed screen size, values between blend the two")]

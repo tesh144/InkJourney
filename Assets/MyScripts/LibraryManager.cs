@@ -500,6 +500,7 @@ public class LibraryManager : MonoBehaviour
         {
             // Own story — delete from server
             GoogleSheetsFetcher.instance.DeleteEntryFromFirestore(entry);
+            JourneyManager.instance?.RemoveStoryFromAllJourneys(entry.ID);
             spawnedChapters.Remove(selectedChapter);
         }
         else

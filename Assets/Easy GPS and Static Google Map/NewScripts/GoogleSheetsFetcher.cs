@@ -76,6 +76,9 @@ public class GoogleSheetsFetcher : MonoBehaviour
     private bool _landmarksReady = false;
     private bool _journeysReady = false;
 
+    // O(1) lookup: is this storyId a chapter in any journey?
+    private HashSet<string> _journeyChapterIds = new HashSet<string>();
+
     private Coroutine _refreshCoroutine;
 
     private Dictionary<Vector2Int, List<Entry>> gridCells = new Dictionary<Vector2Int, List<Entry>>();
@@ -219,7 +222,6 @@ public class GoogleSheetsFetcher : MonoBehaviour
                 DeduplicateStories();
                 LibraryManager.instance?.PopulateList();
                 LibraryManager.instance?.PopulateLikedList();
-                RefreshMap();
                 RefreshWriteButton();
 
                 _storiesReady = true;
@@ -729,6 +731,7 @@ public class GoogleSheetsFetcher : MonoBehaviour
         if (_refreshCoroutine != null)
             StopCoroutine(_refreshCoroutine);
 
+        RebuildJourneyChapterIndex();
         _refreshCoroutine = StartCoroutine(Refresh());
     }
 
@@ -911,14 +914,8 @@ public class GoogleSheetsFetcher : MonoBehaviour
         if (entry == null)
             return false;
 
-        if (JourneyManager.instance != null)
-        {
-            bool isAnyJourneyChapter = journeysList?.Exists(j =>
-                j?.Chapters?.Find(c => c.StoryId == entry.ID) != null) ?? false;
-
-            if (isAnyJourneyChapter)
-                return JourneyManager.instance.IsJourneyStoryVisible(entry.ID);
-        }
+        if (JourneyManager.instance != null && _journeyChapterIds.Contains(entry.ID))
+            return JourneyManager.instance.IsJourneyStoryVisible(entry.ID);
 
         bool isOwned = UserProfileManager.instance != null && UserProfileManager.instance.IsCurrentUser(entry.User);
 
@@ -1604,36 +1601,43 @@ public class GoogleSheetsFetcher : MonoBehaviour
 
         Debug.Log("[Journeys] Fetching Journeys from Firestore...");
 
-        db.Collection("Journeys").GetSnapshotAsync().ContinueWithOnMainThread(task =>
-        {
-            if (task.IsFaulted || task.IsCanceled)
+        string userId = UserProfileManager.instance?.UserId ?? "";
+
+        // Fetch all journeys and filter client-side. WhereEqualTo("Draft", false) would silently
+        // exclude documents that predate the Draft field — missing field parses as false here.
+        db.Collection("Journeys")
+            .GetSnapshotAsync().ContinueWithOnMainThread(task =>
             {
-                Debug.LogError($"[Firebase] Failed to fetch Journeys: {task.Exception}");
-                return;
-            }
-
-            journeysList.Clear();
-
-            foreach (DocumentSnapshot doc in task.Result.Documents)
-            {
-                try
+                if (task.IsFaulted || task.IsCanceled)
                 {
-                    JourneyEntry journey = DocumentToJourneyEntry(doc);
-
-                    if (journey != null)
-                        journeysList.Add(journey);
+                    Debug.LogError($"[Firebase] Failed to fetch Journeys: {task.Exception}");
                 }
-                catch (Exception e)
+                else
                 {
-                    Debug.LogError($"[Firebase] Error parsing Journey doc {doc.Id}: {e.Message}");
+                    var collected = new List<JourneyEntry>();
+                    foreach (var doc in task.Result.Documents)
+                    {
+                        try
+                        {
+                            var journey = DocumentToJourneyEntry(doc);
+                            if (journey == null) continue;
+                            // Exclude other users' drafts
+                            if (journey.Draft && journey.User != userId) continue;
+                            collected.Add(journey);
+                        }
+                        catch (Exception e)
+                        {
+                            Debug.LogError($"[Firebase] Error parsing Journey doc {doc.Id}: {e.Message}");
+                        }
+                    }
+                    journeysList.Clear();
+                    journeysList.AddRange(collected);
+                    Debug.Log($"[Journeys] Fetched journeys from Firestore. Count={journeysList.Count}");
                 }
-            }
 
-            Debug.Log($"[Journeys] Fetched journeys from Firestore. Count={journeysList.Count}");
-
-            _journeysReady = true;
-            TryActivateJourney();
-        });
+                _journeysReady = true;
+                TryActivateJourney();
+            });
     }
 
     private void TryActivateJourney()
@@ -1647,6 +1651,7 @@ public class GoogleSheetsFetcher : MonoBehaviour
         if (!_storiesReady || !_landmarksReady || !_journeysReady)
             return;
 
+        RebuildJourneyChapterIndex();
         ResolveJourneyLocations();
         SortJourneysByDistance();
 
@@ -1655,6 +1660,21 @@ public class GoogleSheetsFetcher : MonoBehaviour
 
         RefreshMap();
     }
+
+    public void RebuildJourneyChapterIndex()
+    {
+        _journeyChapterIds.Clear();
+        foreach (var journey in journeysList)
+        {
+            if (journey?.Chapters == null) continue;
+            foreach (var chapter in journey.Chapters)
+                if (!string.IsNullOrEmpty(chapter.StoryId))
+                    _journeyChapterIds.Add(chapter.StoryId);
+        }
+    }
+
+    public bool IsAnyJourneyChapter(string storyId) =>
+        !string.IsNullOrEmpty(storyId) && _journeyChapterIds.Contains(storyId);
 
     private JourneyEntry DocumentToJourneyEntry(DocumentSnapshot doc)
     {
@@ -1725,6 +1745,10 @@ public class GoogleSheetsFetcher : MonoBehaviour
         foreach (var journey in journeysList)
         {
             if (journey == null || journey.Chapters == null || journey.Chapters.Count == 0)
+                continue;
+
+            // Skip if already resolved to a valid position
+            if (journey.Latitude != 0f || journey.Longitude != 0f)
                 continue;
 
             var firstChapter = journey.Chapters.Find(c => c.Order == 0) ?? journey.Chapters[0];

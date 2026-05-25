@@ -9,10 +9,12 @@ using UnityEngine.UI;
 public class MapRouteManager : MonoBehaviour
 {
     // ── Route type IDs ─────────────────────────────────────────────────────
-    public const string MapPointerRouteType   = "map_pointer";
-    public const string PlacePointerRouteType = "place_pointer";
-    public const string JourneyRouteType      = "journey";
-    public const string JourneyTrailRouteType = "journey_trail";
+    public const string MapPointerRouteType     = "map_pointer";
+    public const string PlacePointerRouteType   = "place_pointer";
+    public const string JourneyRouteType        = "journey";
+    public const string JourneyTrailRouteType   = "journey_trail";
+    public const string ChapterPointerRouteType  = "chapter_pointer";
+    public const string LandmarkPointerRouteType = "landmark_pointer";
 
     // ── Route type definition ──────────────────────────────────────────────
     [Serializable]
@@ -23,6 +25,10 @@ public class MapRouteManager : MonoBehaviour
         public Color  dimColor = new Color(0.05f, 0.3f, 0.38f, 1f);
         [Tooltip("When false a new route of this type replaces any existing one")]
         public bool allowMultiple = false;
+        [Tooltip("When true this route renders in journeyRouteContainer instead of routeContainer")]
+        public bool useJourneyContainer  = false;
+        [Tooltip("When true this route renders in landmarkRouteContainer instead of routeContainer")]
+        public bool useLandmarkContainer = false;
     }
 
     // ── Internal route record ──────────────────────────────────────────────
@@ -44,12 +50,16 @@ public class MapRouteManager : MonoBehaviour
     [Header("Route Types")]
     public List<RouteType> routeTypes = new List<RouteType>
     {
-        new RouteType { id = MapPointerRouteType,   color = new Color(0.2f, 0.9f, 1f, 0.85f) },
-        new RouteType { id = PlacePointerRouteType, color = new Color(0.2f, 0.9f, 1f, 0.85f) },
-        new RouteType { id = JourneyRouteType,     color = new Color(1f, 0.82f, 0.2f, 0.9f),
+        new RouteType { id = MapPointerRouteType,     color = new Color(0.2f, 0.9f, 1f, 0.85f) },
+        new RouteType { id = PlacePointerRouteType,   color = new Color(0.2f, 0.9f, 1f, 0.85f) },
+        new RouteType { id = JourneyRouteType,         color = new Color(1f, 0.82f, 0.2f, 0.9f),
                         dimColor = new Color(0.4f, 0.33f, 0.08f, 1f) },
-        new RouteType { id = JourneyTrailRouteType, color = new Color(0.7f, 0.2f, 0.2f, 0.65f),
-                        dimColor = new Color(0.4f, 0.1f, 0.1f, 0.65f) }
+        new RouteType { id = JourneyTrailRouteType,   color = new Color(0.7f, 0.2f, 0.2f, 0.65f),
+                        dimColor = new Color(0.4f, 0.1f, 0.1f, 0.65f) },
+        new RouteType { id = ChapterPointerRouteType,  color = new Color(0.2f, 0.9f, 1f, 0.85f),
+                        useJourneyContainer = true },
+        new RouteType { id = LandmarkPointerRouteType, color = new Color(0.2f, 0.9f, 1f, 0.85f),
+                        useLandmarkContainer = true }
     };
 
     [Header("Line Appearance")]
@@ -75,6 +85,8 @@ public class MapRouteManager : MonoBehaviour
     public RectTransform routeContainer;
     [Tooltip("Parent RectTransform for journey and journey trail route lines. Falls back to routeContainer if unassigned.")]
     public RectTransform journeyRouteContainer;
+    [Tooltip("Parent RectTransform for landmark route lines. Falls back to routeContainer if unassigned.")]
+    public RectTransform landmarkRouteContainer;
 
     [Header("Outline")]
     public bool    outlineEnabled  = true;
@@ -125,21 +137,39 @@ public class MapRouteManager : MonoBehaviour
         RouteType type = routeTypes.Find(r => r.id == typeId);
         if (type == null)
         {
-            type = new RouteType { id = typeId };
+            type = new RouteType { id = typeId, color = new Color(0.2f, 0.9f, 1f, 0.85f) };
             routeTypes.Add(type);
         }
 
         if (!type.allowMultiple) ClearRoutes(typeId);
 
-        // Mutual exclusion between map_pointer and place_pointer routes
+        // Mutual exclusion between pointer route types
         if (typeId == MapPointerRouteType)
         {
             ClearRoutes(PlacePointerRouteType);
+            ClearRoutes(ChapterPointerRouteType);
+            ClearRoutes(LandmarkPointerRouteType);
             DestinationMarker.instance?.ClearDestination();
         }
         else if (typeId == PlacePointerRouteType)
         {
             ClearRoutes(MapPointerRouteType);
+            ClearRoutes(ChapterPointerRouteType);
+            ClearRoutes(LandmarkPointerRouteType);
+        }
+        else if (typeId == ChapterPointerRouteType)
+        {
+            ClearRoutes(MapPointerRouteType);
+            ClearRoutes(PlacePointerRouteType);
+            ClearRoutes(LandmarkPointerRouteType);
+            DestinationMarker.instance?.ClearDestination();
+        }
+        else if (typeId == LandmarkPointerRouteType)
+        {
+            ClearRoutes(MapPointerRouteType);
+            ClearRoutes(PlacePointerRouteType);
+            ClearRoutes(ChapterPointerRouteType);
+            DestinationMarker.instance?.ClearDestination();
         }
 
         if (_pendingFetch != null) StopCoroutine(_pendingFetch);
@@ -396,9 +426,10 @@ public class MapRouteManager : MonoBehaviour
             _routeCache[cacheKey] = rawCoords;
         }
 
-        RectTransform container = routeContainer != null
-            ? routeContainer
-            : GoogleSheetsFetcher.instance?.mapParentTransform;
+        RectTransform container = (type.id == ChapterPointerRouteType  && journeyRouteContainer  != null) ? journeyRouteContainer
+                                : (type.id == LandmarkPointerRouteType && landmarkRouteContainer != null) ? landmarkRouteContainer
+                                : routeContainer != null ? routeContainer
+                                : GoogleSheetsFetcher.instance?.mapParentTransform;
         if (container == null) yield break;
 
         // Create line object

@@ -53,6 +53,12 @@ public class MapBottomSlider : MonoBehaviour, IBeginDragHandler, IDragHandler, I
     private float        _dragStartHeight;
     private Coroutine    _lerpCoroutine;
 
+    private readonly System.Collections.Generic.Queue<(float y, float t)> _dragHistory
+        = new System.Collections.Generic.Queue<(float, float)>();
+    private const float VelocityWindow     = 0.12f; // seconds of history to keep
+    private const float VelocityStationary = 100f;  // px/s — treat as stationary, snap to nearest
+    private const float VelocityFlick      = 500f;  // px/s — jump an extra stop
+
     void Awake() => instance = this;
 
     // ── Public API ────────────────────────────────────────────────────────
@@ -119,6 +125,7 @@ public class MapBottomSlider : MonoBehaviour, IBeginDragHandler, IDragHandler, I
         _isDragging      = true;
         _dragStartY      = e.position.y;
         _dragStartHeight = panel.sizeDelta.y;
+        _dragHistory.Clear();
         StopLerp();
     }
 
@@ -128,6 +135,11 @@ public class MapBottomSlider : MonoBehaviour, IBeginDragHandler, IDragHandler, I
         float delta  = e.position.y - _dragStartY;
         float target = Mathf.Clamp(_dragStartHeight + delta, heightHidden, HeightForState(_maxState));
         SetPanelHeight(target);
+
+        float now = Time.unscaledTime;
+        _dragHistory.Enqueue((e.position.y, now));
+        while (_dragHistory.Count > 0 && now - _dragHistory.Peek().t > VelocityWindow)
+            _dragHistory.Dequeue();
     }
 
     public void OnEndDrag(PointerEventData e)
@@ -135,12 +147,25 @@ public class MapBottomSlider : MonoBehaviour, IBeginDragHandler, IDragHandler, I
         if (!_isDragging) return;
         _isDragging = false;
 
-        bool draggingUp = e.position.y > _dragStartY;
-        float currentH  = panel.sizeDelta.y;
+        float currentH = panel.sizeDelta.y;
+        float velocity = CalculateVelocity(); // positive = upward
 
-        SliderState next = draggingUp
-            ? NearestStateAbove(currentH)
-            : NearestStateBelow(currentH);
+        SliderState next;
+        if (Mathf.Abs(velocity) < VelocityStationary)
+        {
+            next = NearestState(currentH);
+        }
+        else
+        {
+            bool up = velocity > 0f;
+            next = up ? NearestStateAbove(currentH) : NearestStateBelow(currentH);
+
+            if (Mathf.Abs(velocity) >= VelocityFlick)
+            {
+                next = up ? NearestStateAbove(HeightForState(next) + 1f)
+                          : NearestStateBelow(HeightForState(next) - 1f);
+            }
+        }
 
         GoToState(Clamp(next), animate: true);
     }
@@ -241,4 +266,25 @@ public class MapBottomSlider : MonoBehaviour, IBeginDragHandler, IDragHandler, I
 
     private SliderState Clamp(SliderState state) =>
         state > _maxState ? _maxState : state;
+
+    private float CalculateVelocity()
+    {
+        if (_dragHistory.Count < 2) return 0f;
+        var arr = _dragHistory.ToArray();
+        float dy = arr[arr.Length - 1].y - arr[0].y;
+        float dt = arr[arr.Length - 1].t - arr[0].t;
+        return dt > 0f ? dy / dt : 0f;
+    }
+
+    private SliderState NearestState(float h)
+    {
+        SliderState best  = SliderState.Hidden;
+        float       bestD = float.MaxValue;
+        foreach (SliderState s in System.Enum.GetValues(typeof(SliderState)))
+        {
+            float d = Mathf.Abs(h - HeightForState(s));
+            if (d < bestD) { bestD = d; best = s; }
+        }
+        return best;
+    }
 }

@@ -51,10 +51,10 @@ Material:
     - _EnableExternalAlpha: 0
     - _InnerRadius: 0.75
     - _OuterRadius: 1
-    - _PaperStrength: 0.821
+    - _PaperStrength: 0.688
     - _PaperTiling: 4
     - _Roundness: 8.63
-    - _Saturation: 1
+    - _Saturation: 1.1
     - _Stencil: 0
     - _StencilComp: 8
     - _StencilOp: 0

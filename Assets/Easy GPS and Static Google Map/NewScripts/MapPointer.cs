@@ -424,6 +424,15 @@ public class MapPointer : MonoBehaviour
         entry != null &&
         JourneyManager.instance?.activeJourney?.Chapters?.Find(c => c.StoryId == entry.ID) != null;
 
+    private string PointerRouteType()
+    {
+        if (GoogleSheetsFetcher.instance?.IsAnyJourneyChapter(entry?.ID) == true)
+            return MapRouteManager.ChapterPointerRouteType;
+        if (GoogleSheetsFetcher.IsLandmark(entry))
+            return MapRouteManager.LandmarkPointerRouteType;
+        return MapRouteManager.MapPointerRouteType;
+    }
+
     private void OnJourneyStateChanged() { UpdateColors(); RefreshOwnerVisuals(); }
 
     private void UpdateColors()
@@ -660,6 +669,14 @@ public class MapPointer : MonoBehaviour
         // Always centre the map on this pointer, regardless of state.
         MapLoader.instance?.resetScrollRect?.LerpToCenterTarget(transform);
 
+#if UNITY_EDITOR
+        if ((MapLoader.instance != null && MapLoader.instance.debugEditOnSelect) && isExpanded && entry != null)
+        {
+            CreateNewStory.instance?.LoadForEdit(entry);
+            return;
+        }
+#endif
+
         if (isExpanded && IsWithinProximity())
         {
             if (entry != null) MarkStoryRead(entry.ID);
@@ -679,14 +696,15 @@ public class MapPointer : MonoBehaviour
             s_routePointer = this;
             onSelected?.Invoke();
             UpdateColors();
-            // Journey chapters don't draw a map_pointer route — the journey route takes priority
-            if (MapRouteManager.instance != null && GPSManager.Instance != null && !IsJourneyChapter())
+            if (MapRouteManager.instance != null && GPSManager.Instance != null)
+            {
                 MapRouteManager.instance.DrawRoute(
-                    MapRouteManager.MapPointerRouteType,
+                    PointerRouteType(),
                     GPSManager.Instance.latitude,
                     GPSManager.Instance.longitude,
                     latitude,
                     longitude);
+            }
             MapPointerPopup.instance?.Hide();
             googleSheetManager.TurnOnStory();
             return;
@@ -697,6 +715,8 @@ public class MapPointer : MonoBehaviour
         {
             s_routePointer = null;
             MapRouteManager.instance?.ClearRoutes(MapRouteManager.MapPointerRouteType);
+            MapRouteManager.instance?.ClearRoutes(MapRouteManager.ChapterPointerRouteType);
+            MapRouteManager.instance?.ClearRoutes(MapRouteManager.LandmarkPointerRouteType);
             MapPointerPopup.instance?.Hide();
             return;
         }
@@ -705,14 +725,14 @@ public class MapPointer : MonoBehaviour
         if (!IsWithinProximity())
             MapPointerPopup.instance?.Show(this);
 
-        // Draw a route to the tapped pointer — unless the journey route already covers it
-        if (MapRouteManager.instance != null && GPSManager.Instance != null && !IsJourneyChapter())
+        // Draw a route to the tapped pointer
+        if (MapRouteManager.instance != null && GPSManager.Instance != null)
         {
             s_routePointer = this;
             onSelected?.Invoke();
             UpdateColors();
             MapRouteManager.instance.DrawRoute(
-                MapRouteManager.MapPointerRouteType,
+                PointerRouteType(),
                 GPSManager.Instance.latitude,
                 GPSManager.Instance.longitude,
                 latitude,
