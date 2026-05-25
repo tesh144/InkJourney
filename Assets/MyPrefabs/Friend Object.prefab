@@ -65,7 +65,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: Wanderer_Jane
+  m_text: BlackGirlMagic_96
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 58e25ea9598f0412ebd4c5fd5992aff9, type: 2}
   m_sharedMaterial: {fileID: 1225021774337064244, guid: 58e25ea9598f0412ebd4c5fd5992aff9, type: 2}
@@ -191,7 +191,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_Sprite: {fileID: 1869120011, guid: 41a70ec05906b4b5fbe9897d7a6c105f, type: 3}
+  m_Sprite: {fileID: -1207641009, guid: c3061fe9731424b289b5bbbc3979d343, type: 3}
   m_Type: 0
   m_PreserveAspect: 1
   m_FillCenter: 1
