@@ -47,9 +47,12 @@ public class MainMapUserCursorController : MonoBehaviour, IBeginDragHandler, IDr
     public bool verboseLogs = false;
 
     public bool IsFollowing => _state == TrackingState.Following;
-    public bool ShouldAllowAutomaticMapReload => IsFollowing || allowMapReloadWhileExploring;
+    public bool ShouldAllowAutomaticMapReload => !_isRoaming && (IsFollowing || allowMapReloadWhileExploring);
 
     private TrackingState _state = TrackingState.Following;
+    private bool _isRoaming;
+    private bool  _hasPendingPan;
+    private float _pendingPanLat, _pendingPanLon, _pendingPanZoom;
     private Vector2 _targetCursorPos;
     private Vector2 _cursorVelocity;
     private float _sampleTimer;
@@ -99,12 +102,16 @@ public class MainMapUserCursorController : MonoBehaviour, IBeginDragHandler, IDr
     {
         MapLoader.onMainMapReloadStateChanged += OnMainMapReloadStateChanged;
         MapLoader.onStyleChanged += OnMapStyleChanged;
+        JourneyManager.onJourneyActivated   += OnJourneyActivated;
+        JourneyManager.onJourneyDeactivated += OnJourneyDeactivated;
     }
 
     private void OnDisable()
     {
         MapLoader.onMainMapReloadStateChanged -= OnMainMapReloadStateChanged;
         MapLoader.onStyleChanged -= OnMapStyleChanged;
+        JourneyManager.onJourneyActivated   -= OnJourneyActivated;
+        JourneyManager.onJourneyDeactivated -= OnJourneyDeactivated;
 
         if (scrollRect != null)
             scrollRect.inertia = _savedInertia;
@@ -114,6 +121,86 @@ public class MainMapUserCursorController : MonoBehaviour, IBeginDragHandler, IDr
     {
         if (Instance == this)
             Instance = null;
+    }
+
+    private void OnJourneyActivated()
+    {
+        _isRoaming = true;
+    }
+
+    private void OnJourneyDeactivated()
+    {
+        _isRoaming      = false;
+        _hasPendingPan  = false;
+        SetCursorVisible(true);
+        if (mapLoader != null) mapLoader.Refresh();
+    }
+
+    public void SetCursorVisible(bool visible)
+    {
+        if (userCursor != null) userCursor.gameObject.SetActive(visible);
+    }
+
+    public void PanToLatLon(float lat, float lon, float targetZoom = -1f)
+    {
+        _pendingPanLat  = lat;
+        _pendingPanLon  = lon;
+        _pendingPanZoom = targetZoom;
+        _hasPendingPan  = true;
+        ExecutePan(lat, lon, targetZoom);
+    }
+
+    private void ExecutePan(float lat, float lon, float targetZoom)
+    {
+        if (scrollRect == null || mapLoader == null || mapContent == null) return;
+
+        Vector2 logical = ProjectToMapLogicalPosition(lat, lon,
+            mapLoader.CurrentMapCenterLat, mapLoader.CurrentMapCenterLon, mapLoader.CurrentMapZoom);
+
+        Rect content  = mapContent.rect;
+        float scaleX  = content.width  / 640f;
+        float scaleY  = content.height / 640f;
+
+        // localScale is the zoom level — ScrollRect scroll bounds are in world (scaled) space
+        float zoomX = mapContent.localScale.x;
+        float zoomY = mapContent.localScale.y;
+
+        RectTransform viewport = scrollRect.viewport != null
+            ? scrollRect.viewport
+            : (RectTransform)scrollRect.transform;
+        Rect vp = viewport.rect;
+
+        float scrollableX = content.width  * zoomX - vp.width;
+        float scrollableY = content.height * zoomY - vp.height;
+
+        float normX = scrollableX > 0f ? Mathf.Clamp01(0.5f + (logical.x * scaleX * zoomX) / scrollableX) : 0.5f;
+        float normY = scrollableY > 0f ? Mathf.Clamp01(0.5f + (logical.y * scaleY * zoomY) / scrollableY) : 0.5f;
+
+        if (targetZoom > 0f && MapInputController.instance != null)
+            MapInputController.instance.SetTargetZoom(targetZoom);
+
+        StartCoroutine(AnimatePan(normX, normY));
+    }
+
+    private System.Collections.IEnumerator AnimatePan(float targetNormX, float targetNormY)
+    {
+        float startX   = scrollRect.horizontalNormalizedPosition;
+        float startY   = scrollRect.verticalNormalizedPosition;
+        float elapsed  = 0f;
+        const float duration = 0.4f;
+        scrollRect.velocity = Vector2.zero;
+
+        while (elapsed < duration)
+        {
+            elapsed += Time.unscaledDeltaTime;
+            float t = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(elapsed / duration));
+            scrollRect.horizontalNormalizedPosition = Mathf.Lerp(startX, targetNormX, t);
+            scrollRect.verticalNormalizedPosition   = Mathf.Lerp(startY, targetNormY, t);
+            yield return null;
+        }
+
+        scrollRect.horizontalNormalizedPosition = targetNormX;
+        scrollRect.verticalNormalizedPosition   = targetNormY;
     }
 
     public void OnBeginDrag(PointerEventData eventData)
@@ -279,7 +366,7 @@ public class MainMapUserCursorController : MonoBehaviour, IBeginDragHandler, IDr
         {
             UpdateTargetCursorPositionFromGps();
 
-            if (_hasPreReloadScroll && scrollRect != null)
+            if (_hasPreReloadScroll && scrollRect != null && !_isRoaming)
             {
                 scrollRect.horizontalNormalizedPosition = _preReloadHorizontal;
                 scrollRect.verticalNormalizedPosition = _preReloadVertical;
@@ -290,6 +377,9 @@ public class MainMapUserCursorController : MonoBehaviour, IBeginDragHandler, IDr
             _suppressFollowRecentering = true;
             if (verboseLogs)
                 Debug.Log("[MainMapCursor] Reload finished, restored pre-reload viewport/state");
+
+            if (_isRoaming && _hasPendingPan)
+                ExecutePan(_pendingPanLat, _pendingPanLon, _pendingPanZoom);
         }
     }
 
@@ -349,7 +439,7 @@ public class MainMapUserCursorController : MonoBehaviour, IBeginDragHandler, IDr
         return Mathf.Sqrt(dx * dx + dy * dy);
     }
 
-    private static Vector2 ProjectToMapLogicalPosition(float latitude, float longitude, float centerLat, float centerLon, int zoomLevel)
+    public static Vector2 ProjectToMapLogicalPosition(float latitude, float longitude, float centerLat, float centerLon, int zoomLevel)
     {
         Vector2 point = LatLonToPixel(latitude, longitude, zoomLevel);
         Vector2 center = LatLonToPixel(centerLat, centerLon, zoomLevel);

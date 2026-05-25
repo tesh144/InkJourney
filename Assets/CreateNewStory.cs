@@ -1112,6 +1112,9 @@ public class CreateNewStory : MonoBehaviour
         // Spawn pin immediately — visible feedback before upload finishes
         GoogleSheetsFetcher.instance.SpawnNewMapPointer(postEntry);
 
+        if (JourneyManager.instance != null && JourneyManager.instance.isCreatingJourney)
+            JourneyManager.instance.AddStoryToCreatingJourney(postEntry);
+
         // Apply reward before FinishPost resets the counter
         if (inkRewardCounter != null && !isEditMode)
             InkManager.instance?.ApplyWithDelay(inkRewardCounter.CurrentReward);
@@ -1208,6 +1211,9 @@ public class CreateNewStory : MonoBehaviour
             if (e.Expire  == 0) e.Expire  = StoryLifetimeManager.instance != null
                 ? StoryLifetimeManager.instance.GetInitialExpire()
                 : DateTimeOffset.UtcNow.AddDays(365).ToUnixTimeSeconds();
+            if (JourneyManager.instance != null && JourneyManager.instance.isCreatingJourney
+                && e.Created >= (JourneyManager.instance.creatingJourney?.Created ?? long.MaxValue))
+                JourneyManager.instance.AddStoryToCreatingJourney(e);
         }
         e.Tags?.Remove("draft");
 

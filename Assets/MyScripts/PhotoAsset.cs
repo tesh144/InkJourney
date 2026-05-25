@@ -15,6 +15,7 @@ public class PhotoAsset : MonoBehaviour
     private Animator  _animator;
     private Coroutine _fadeCoroutine;
     private float     _spawnTime;
+    private string    _pendingUrl;
     private static readonly int ShuffleTrigger = Animator.StringToHash("Shuffle");
 
     private static readonly Dictionary<string, Texture2D>             _thumbCache = new();
@@ -82,7 +83,21 @@ public class PhotoAsset : MonoBehaviour
             rotatedTransform.localRotation = Quaternion.Euler(0f, 0f, Random.Range(rotMin, rotMax));
 
         if (!string.IsNullOrEmpty(url))
-            StartCoroutine(LoadTexture(url));
+        {
+            if (gameObject.activeInHierarchy)
+                StartCoroutine(LoadTexture(url));
+            else
+                _pendingUrl = url;
+        }
+    }
+
+    private void OnEnable()
+    {
+        if (!string.IsNullOrEmpty(_pendingUrl))
+        {
+            StartCoroutine(LoadTexture(_pendingUrl));
+            _pendingUrl = null;
+        }
     }
 
     public void PlayShuffle() => _animator?.SetTrigger(ShuffleTrigger);

@@ -826,6 +826,44 @@ public class GoogleSheetsFetcher : MonoBehaviour
             }
         }
 
+        // Show all stories belonging to the journey currently being created/edited
+        var creatingJourney = JourneyManager.instance?.creatingJourney;
+
+        if (creatingJourney?.Chapters != null)
+        {
+            foreach (var chapter in creatingJourney.Chapters)
+            {
+                if (string.IsNullOrEmpty(chapter.StoryId))
+                    continue;
+
+                var story = storiesList.Find(e => e?.ID == chapter.StoryId)
+                         ?? landmarksList.Find(e => e?.ID == chapter.StoryId);
+
+                if (story == null)
+                    continue;
+
+                if (journeyMapParentTransform != null &&
+                    story.pointer != null &&
+                    story.pointer.transform.parent != journeyMapParentTransform)
+                {
+                    story.pointer.transform.SetParent(journeyMapParentTransform, false);
+                    story.pointer.mapTransform = journeyMapParentTransform;
+                }
+
+                if (story.pointer == null)
+                {
+                    InstantiatePrefab(story, IsLandmark(story) ? "Landmarks" : "Stories");
+                }
+                else
+                {
+                    if (!story.pointer.gameObject.activeSelf)
+                        story.pointer.gameObject.SetActive(true);
+
+                    story.pointer.UpdatePosition();
+                }
+            }
+        }
+
         RefreshWriteButton();
     }
 
@@ -1627,6 +1665,9 @@ public class GoogleSheetsFetcher : MonoBehaviour
             ID = doc.Id,
             Title = GetString(data, "Title"),
             Description = GetString(data, "Description"),
+            User = GetString(data, "User"),
+            Draft = data.ContainsKey("Draft") && data["Draft"] is bool b && b,
+            FontID = GetInt(data, "FontID"),
             StickerID = GetInt(data, "StickerID"),
             MapStyleIndex = GetInt(data, "MapStyleIndex"),
             Tags = GetTags(data, "Tags"),

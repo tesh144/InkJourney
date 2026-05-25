@@ -372,6 +372,16 @@ public class MapPointer : MonoBehaviour
     private void AnimateHeight(float targetHeight)
     {
         if (expandCoroutine != null) StopCoroutine(expandCoroutine);
+        if (!gameObject.activeInHierarchy)
+        {
+            if (expandObject != null)
+            {
+                var sz = expandObject.sizeDelta;
+                sz.y = targetHeight;
+                expandObject.sizeDelta = sz;
+            }
+            return;
+        }
         expandCoroutine = StartCoroutine(SmoothHeight(targetHeight));
     }
 

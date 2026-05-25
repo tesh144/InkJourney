@@ -22,6 +22,14 @@ public class PhotoShuffle : MonoBehaviour
         }
     }
 
+    public void AddPhoto(string url)
+    {
+        if (string.IsNullOrEmpty(url) || photoAssetPrefab == null) return;
+        var asset = Instantiate(photoAssetPrefab, transform);
+        asset.transform.SetAsFirstSibling();
+        asset.Initialise(url, rotationMin, rotationMax, extraDelay: 0f);
+    }
+
     public void Clear()
     {
         for (int i = transform.childCount - 1; i >= 0; i--)

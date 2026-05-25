@@ -1,10 +1,15 @@
+using System;
 using System.Collections.Generic;
 
+[Serializable]
 public class JourneyEntry
 {
     public string ID;
     public string Title;
     public string Description;
+    public string User;           // Firebase UID of the author; empty for curated journeys
+    public bool   Draft;          // true while journey is being created; cleared on Finish
+    public int    FontID;
     public int    StickerID;
     public int    MapStyleIndex;
     public List<string> Tags = new List<string>();
@@ -15,6 +20,7 @@ public class JourneyEntry
     public float Latitude;
     public float Longitude;
 
+    [Serializable]
     public class ChapterDef
     {
         public string Id;
@@ -25,6 +31,7 @@ public class JourneyEntry
         public UnlockCondition Condition;     // null = always
     }
 
+    [Serializable]
     public class UnlockCondition
     {
         public string Type; // "always" | "proximity" | "time_of_day" | "time_delay" | "write_story" | "seasonal"

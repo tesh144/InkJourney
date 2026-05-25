@@ -71,8 +71,10 @@ public class MapRouteManager : MonoBehaviour
                public float pulseAlphaSpeed  = 1.5f;
 
     [Header("Route Container")]
-    [Tooltip("Parent RectTransform for route lines — keep this separate from Pointers/Landmarks so routes sit behind them. Must be inside MapArea.")]
+    [Tooltip("Parent RectTransform for non-journey route lines (map pointer, place pointer).")]
     public RectTransform routeContainer;
+    [Tooltip("Parent RectTransform for journey and journey trail route lines. Falls back to routeContainer if unassigned.")]
+    public RectTransform journeyRouteContainer;
 
     [Header("Outline")]
     public bool    outlineEnabled  = true;
@@ -178,9 +180,8 @@ public class MapRouteManager : MonoBehaviour
             routeTypes.Add(type);
         }
 
-        RectTransform container = routeContainer != null
-            ? routeContainer
-            : GoogleSheetsFetcher.instance?.mapParentTransform;
+        RectTransform container = journeyRouteContainer ?? routeContainer
+                               ?? GoogleSheetsFetcher.instance?.mapParentTransform;
         if (container == null) return;
 
         var go = new GameObject($"Route_{JourneyRouteType}", typeof(RectTransform),
@@ -269,9 +270,8 @@ public class MapRouteManager : MonoBehaviour
             routeTypes.Add(type);
         }
 
-        RectTransform container = routeContainer != null
-            ? routeContainer
-            : GoogleSheetsFetcher.instance?.mapParentTransform;
+        RectTransform container = journeyRouteContainer ?? routeContainer
+                               ?? GoogleSheetsFetcher.instance?.mapParentTransform;
         if (container == null) return;
 
         var go = new GameObject($"Route_{JourneyTrailRouteType}",

@@ -109,7 +109,7 @@ public class JourneyObject : MonoBehaviour
             if (progressText != null) progressText.text = $"{completed}/{total}";
         }
 
-        SetSelected(false);
+        SetSelected(isMapCard);
     }
 
     public void SetSelected(bool selected)

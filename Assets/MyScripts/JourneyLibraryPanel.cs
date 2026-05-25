@@ -1,15 +1,18 @@
 using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
-using UnityEngine.Networking;
+using UnityEngine.Serialization;
 using UnityEngine.UI;
 
 public class JourneyLibraryPanel : MonoBehaviour
 {
     public static JourneyLibraryPanel instance;
 
-    [Header("Journey List")]
-    public Transform journeyListParent;
+    [Header("Journey Lists")]
+    [FormerlySerializedAs("journeyListParent")]
+    public Transform ownedJourneyListParent;
+    public Transform savedJourneyListParent;
+    public Transform publicJourneyListParent;
     public GameObject journeyObjectPrefab;
     public TMP_InputField searchInput;
 
@@ -27,15 +30,9 @@ public class JourneyLibraryPanel : MonoBehaviour
     public Slider previewProgressBar;
     public Button startJourneyButton;
     public Button stopJourneyButton;
-    public RawImage journeyMapImage;
 
     [Header("Photo Stack")]
     public PhotoShuffle photoShuffle;
-
-    [Header("Preview Map Pins")]
-    public Color chapterPinColor = new Color(0.96f, 0.65f, 0.14f); // #f5a623
-    public enum PinSize { Small, Medium, Large }
-    public PinSize chapterPinSize = PinSize.Small;
 
     private JourneyObject selectedJourney;
     private readonly List<JourneyObject> spawnedJourneys = new List<JourneyObject>();
@@ -63,8 +60,8 @@ public class JourneyLibraryPanel : MonoBehaviour
         RefreshStartStopButtons();
         PopulateJourneysList();
 
-        JourneyManager.onJourneyActivated   += OnJourneyActivationChanged;
-        JourneyManager.onJourneyDeactivated += OnJourneyActivationChanged;
+        JourneyManager.onJourneyActivated   += OnJourneyActivated;
+        JourneyManager.onJourneyDeactivated += OnJourneyDeactivated;
     }
 
     private void OnDisable()
@@ -72,22 +69,25 @@ public class JourneyLibraryPanel : MonoBehaviour
         if (searchInput != null)
             searchInput.onValueChanged.RemoveListener(OnSearchChanged);
 
-        JourneyManager.onJourneyActivated   -= OnJourneyActivationChanged;
-        JourneyManager.onJourneyDeactivated -= OnJourneyActivationChanged;
-
-        // Reset the map image so it doesn't persist into other panels
-        if (journeyMapImage != null)
-        {
-            journeyMapImage.texture = null;
-            journeyMapImage.uvRect  = new Rect(0f, 0f, 1f, 1f);
-            journeyMapImage.color   = Color.white;
-        }
+        JourneyManager.onJourneyActivated   -= OnJourneyActivated;
+        JourneyManager.onJourneyDeactivated -= OnJourneyDeactivated;
     }
 
-    private void OnJourneyActivationChanged()
+    private void OnJourneyActivated()
     {
         RefreshStartStopButtons();
-        PopulateJourneysList();
+        ApplyFilters();
+    }
+
+    private void OnJourneyDeactivated()
+    {
+        if (selectedJourney != null)
+        {
+            selectedJourney.SetSelected(false);
+            selectedJourney = null;
+        }
+        RefreshStartStopButtons();
+        ApplyFilters();
     }
 
     // ── List Population ───────────────────────────────────────────────────
@@ -104,11 +104,17 @@ public class JourneyLibraryPanel : MonoBehaviour
         var journeys = GoogleSheetsFetcher.instance?.journeysList;
         if (journeys == null) return;
 
-        foreach (var journey in journeys)
+        var sorted = new System.Collections.Generic.List<JourneyEntry>(journeys);
+        sorted.Sort((a, b) => b.Created.CompareTo(a.Created));
+
+        foreach (var journey in sorted)
         {
             if (journey == null) continue;
 
-            var go = Instantiate(journeyObjectPrefab, journeyListParent);
+            var parent = GetListParentForJourney(journey);
+            if (parent == null) continue;
+
+            var go = Instantiate(journeyObjectPrefab, parent);
             var jo = go.GetComponent<JourneyObject>();
             if (jo == null) continue;
 
@@ -118,6 +124,37 @@ public class JourneyLibraryPanel : MonoBehaviour
 
         ApplyFilters();
         PrewarmAllPhotos();
+        RestoreActiveJourneySelection();
+    }
+
+    private Transform GetListParentForJourney(JourneyEntry journey)
+    {
+        string userId = UserProfileManager.instance?.UserId;
+
+        // Priority 1: owned
+        if (!string.IsNullOrEmpty(userId) && journey.User == userId)
+            return ownedJourneyListParent;
+
+        // Priority 2: saved (user has read at least one chapter)
+        if (JourneyManager.instance != null &&
+            JourneyManager.instance.GetCompletedChapterIds(journey.ID).Count > 0)
+            return savedJourneyListParent;
+
+        // Priority 3: public
+        return publicJourneyListParent;
+    }
+
+    private void RestoreActiveJourneySelection()
+    {
+        var active = JourneyManager.instance?.activeJourney;
+        if (active == null) return;
+
+        var jo = spawnedJourneys.Find(j => j?.entry?.ID == active.ID);
+        if (jo == null) return;
+
+        selectedJourney = jo;
+        jo.SetSelected(true);
+        RefreshPreviewPanel();
     }
 
     private void PrewarmAllPhotos()
@@ -133,8 +170,9 @@ public class JourneyLibraryPanel : MonoBehaviour
                 if (string.IsNullOrEmpty(chapter.StoryId)) continue;
                 var story = fetcher.storiesList?.Find(e => e?.ID == chapter.StoryId)
                          ?? fetcher.landmarksList?.Find(e => e?.ID == chapter.StoryId);
-                if (!string.IsNullOrEmpty(story?.PhotoUrl))
-                    StartCoroutine(PhotoAsset.Prewarm(story.PhotoUrl));
+                string url = ResolvePhotoUrl(story);
+                if (!string.IsNullOrEmpty(url))
+                    StartCoroutine(PhotoAsset.Prewarm(url));
             }
         }
     }
@@ -143,17 +181,97 @@ public class JourneyLibraryPanel : MonoBehaviour
 
     public void SelectJourney(JourneyObject jo)
     {
+        if (selectedJourney == jo)
+        {
+            selectedJourney.SetSelected(false);
+            selectedJourney = null;
+            JourneyManager.instance?.DeactivateJourney();
+            RefreshPreviewPanel();
+            return;
+        }
+
         if (selectedJourney != null) selectedJourney.SetSelected(false);
         selectedJourney = jo;
         if (selectedJourney != null) selectedJourney.SetSelected(true);
 
+        if (selectedJourney?.entry != null && JourneyManager.instance != null)
+        {
+            var entry = selectedJourney.entry;
+            if (IsOwnedByCurrentUser(entry))
+            {
+                JourneyManager.instance.BeginEditingJourney(entry);
+                UIStateManager.instance?.ActivateEditJourneySubState();
+            }
+            else
+            {
+                JourneyManager.instance.ActivateJourney(entry);
+                FocusMapOnJourney(entry);
+            }
+        }
+
         RefreshPreviewPanel();
+    }
+
+    private static bool IsOwnedByCurrentUser(JourneyEntry entry)
+    {
+        if (entry == null || string.IsNullOrEmpty(entry.User)) return false;
+        return entry.User == UserProfileManager.instance?.UserId;
+    }
+
+    private void FocusMapOnJourney(JourneyEntry entry)
+    {
+        var loader = MapLoader.instance;
+        var cursor = MainMapUserCursorController.Instance;
+        if (loader == null || cursor == null) return;
+
+        float focusLat = entry.Latitude;
+        float focusLon = entry.Longitude;
+
+        if (entry.Chapters != null && entry.Chapters.Count > 0)
+        {
+            var first = entry.Chapters.Find(c => c.Order == 0) ?? entry.Chapters[0];
+            var story = GoogleSheetsFetcher.instance?.storiesList?.Find(e => e?.ID == first.StoryId)
+                     ?? GoogleSheetsFetcher.instance?.landmarksList?.Find(e => e?.ID == first.StoryId);
+            if (story != null && (story.Latitude != 0f || story.Longitude != 0f))
+            {
+                focusLat = story.Latitude;
+                focusLon = story.Longitude;
+            }
+        }
+
+        if (focusLat == 0f && focusLon == 0f) return;
+
+        float targetZoom = MapInputController.instance != null
+            ? MapInputController.instance.minScale
+            : -1f;
+
+        Vector2 offset = MainMapUserCursorController.ProjectToMapLogicalPosition(
+            focusLat, focusLon,
+            loader.CurrentMapCenterLat, loader.CurrentMapCenterLon, loader.CurrentMapZoom);
+
+        if (Mathf.Abs(offset.x) < 560f && Mathf.Abs(offset.y) < 560f)
+        {
+            cursor.PanToLatLon(focusLat, focusLon, targetZoom);
+        }
+        else
+        {
+            cursor.SetCursorVisible(false);
+            if (targetZoom > 0f && MapInputController.instance != null)
+                MapInputController.instance.SetTargetZoom(targetZoom);
+            loader.LoadAtCoordinate(focusLat, focusLon);
+        }
     }
 
     private void RefreshPreviewPanel()
     {
         var entry = selectedJourney?.entry;
-        if (entry == null) return;
+        if (entry == null)
+        {
+            if (startJourneyButton != null) startJourneyButton.gameObject.SetActive(false);
+            if (stopJourneyButton  != null) stopJourneyButton.gameObject.SetActive(false);
+            photoShuffle?.Clear();
+            return;
+        }
 
         PopulatePhotoStack(entry);
 
@@ -184,7 +302,6 @@ public class JourneyLibraryPanel : MonoBehaviour
             previewProgressBar.value = JourneyManager.instance.GetProgressPercent(entry.ID);
 
         RefreshStartStopButtons();
-        LoadPreviewMap(entry);
     }
 
     private void PopulatePhotoStack(JourneyEntry entry)
@@ -200,8 +317,9 @@ public class JourneyLibraryPanel : MonoBehaviour
                 if (string.IsNullOrEmpty(chapter.StoryId)) continue;
                 var story = fetcher?.storiesList?.Find(e => e?.ID == chapter.StoryId)
                          ?? fetcher?.landmarksList?.Find(e => e?.ID == chapter.StoryId);
-                if (!string.IsNullOrEmpty(story?.PhotoUrl))
-                    urls.Add(story.PhotoUrl);
+                string url = ResolvePhotoUrl(story);
+                if (!string.IsNullOrEmpty(url))
+                    urls.Add(url);
             }
         }
 
@@ -211,10 +329,19 @@ public class JourneyLibraryPanel : MonoBehaviour
             photoShuffle.Clear();
     }
 
+    private static string ResolvePhotoUrl(GoogleSheetsFetcher.Entry story)
+    {
+        if (story == null) return null;
+        if (!string.IsNullOrEmpty(story.PhotoUrl)) return story.PhotoUrl;
+        if (!string.IsNullOrEmpty(story.ID) && PhotoUploadQueue.HasPending(story.ID))
+            return "file://" + PhotoUploadQueue.FilePath(story.ID);
+        return null;
+    }
+
     private void RefreshStartStopButtons()
     {
         var entry = selectedJourney?.entry;
-        if (entry == null)
+        if (entry == null || IsOwnedByCurrentUser(entry))
         {
             if (startJourneyButton != null) startJourneyButton.gameObject.SetActive(false);
             if (stopJourneyButton  != null) stopJourneyButton.gameObject.SetActive(false);
@@ -224,76 +351,6 @@ public class JourneyLibraryPanel : MonoBehaviour
         bool isActive = JourneyManager.instance?.activeJourney?.ID == entry.ID;
         if (startJourneyButton != null) startJourneyButton.gameObject.SetActive(!isActive);
         if (stopJourneyButton  != null) stopJourneyButton.gameObject.SetActive(isActive);
-    }
-
-    private void LoadPreviewMap(JourneyEntry entry)
-    {
-        if (journeyMapImage == null || MapLoader.instance == null) return;
-        if (entry.Latitude == 0f && entry.Longitude == 0f) return;
-
-        string styleId = MapLoader.instance.mapStyles != null && MapLoader.instance.mapStyles.Count > 0
-            ? MapLoader.instance.mapStyles[entry.MapStyleIndex % MapLoader.instance.mapStyles.Count].styleString
-            : "mapbox/dark-v11";
-
-        // Build chapter pin overlays: pin-s-1+colour(lon,lat),pin-s-2+colour(lon,lat),...
-        var overlayParts = new System.Collections.Generic.List<string>();
-        if (entry.Chapters != null)
-        {
-            foreach (var chapter in entry.Chapters)
-            {
-                if (string.IsNullOrEmpty(chapter.StoryId)) continue;
-                var story = GoogleSheetsFetcher.instance?.storiesList?.Find(e => e?.ID == chapter.StoryId)
-                         ?? GoogleSheetsFetcher.instance?.landmarksList?.Find(e => e?.ID == chapter.StoryId);
-                if (story == null || (story.Latitude == 0f && story.Longitude == 0f)) continue;
-
-                string sizeCode = chapterPinSize == PinSize.Large ? "l" : chapterPinSize == PinSize.Medium ? "m" : "s";
-                string hex      = ColorUtility.ToHtmlStringRGB(chapterPinColor);
-                string label    = (chapter.Order + 1).ToString();
-                string lon      = story.Longitude.ToString("F6", System.Globalization.CultureInfo.InvariantCulture);
-                string lat      = story.Latitude.ToString("F6", System.Globalization.CultureInfo.InvariantCulture);
-                overlayParts.Add($"pin-{sizeCode}-{label}+{hex}({lon},{lat})");
-            }
-        }
-
-        string overlay = overlayParts.Count > 0 ? string.Join(",", overlayParts) + "/" : "";
-        string center  = $"{entry.Longitude.ToString("F6", System.Globalization.CultureInfo.InvariantCulture)},{entry.Latitude.ToString("F6", System.Globalization.CultureInfo.InvariantCulture)}";
-        string url     = $"https://api.mapbox.com/styles/v1/{styleId}/static/{overlay}{center},13,0/640x320@2x?access_token={MapLoader.instance.mapboxToken}";
-
-        // Clear old image immediately so it doesn't show stale content while loading
-        if (journeyMapImage != null)
-        {
-            journeyMapImage.texture = null;
-            journeyMapImage.uvRect  = new Rect(0f, 0f, 1f, 1f);
-            journeyMapImage.color   = Color.white;
-        }
-
-        StartCoroutine(LoadMapImage(url));
-    }
-
-    private System.Collections.IEnumerator LoadMapImage(string url)
-    {
-        Texture2D tex = null;
-        yield return MapboxImageCache.Fetch(url, t => tex = t);
-        if (tex == null || journeyMapImage == null) yield break;
-        {
-            journeyMapImage.texture = tex;
-
-            // Center-crop so the texture fills the container without stretching
-            float texAspect  = tex.width  / (float)tex.height;
-            float dispAspect = journeyMapImage.rectTransform.rect.width
-                             / journeyMapImage.rectTransform.rect.height;
-
-            if (texAspect > dispAspect)
-            {
-                float u = dispAspect / texAspect;
-                journeyMapImage.uvRect = new Rect((1f - u) * 0.5f, 0f, u, 1f);
-            }
-            else
-            {
-                float v = texAspect / dispAspect;
-                journeyMapImage.uvRect = new Rect(0f, (1f - v) * 0.5f, 1f, v);
-            }
-        }
     }
 
     // ── Start / Stop ──────────────────────────────────────────────────────
@@ -342,18 +399,21 @@ public class JourneyLibraryPanel : MonoBehaviour
 
     private void ApplyFilters()
     {
-        string activeId = JourneyManager.instance?.activeJourney?.ID;
         foreach (var jo in spawnedJourneys)
         {
             if (jo == null) continue;
-            bool show = MatchesFilter(jo.entry) && jo.entry?.ID != activeId;
-            jo.gameObject.SetActive(show);
+            jo.gameObject.SetActive(MatchesFilter(jo.entry));
         }
     }
 
     private bool MatchesFilter(JourneyEntry entry)
     {
         if (entry == null) return false;
+        if (entry.Draft)
+        {
+            string userId = UserProfileManager.instance?.UserId;
+            if (string.IsNullOrEmpty(userId) || entry.User != userId) return false;
+        }
 
         if (_typeFilter != 0 && JourneyManager.instance != null)
         {

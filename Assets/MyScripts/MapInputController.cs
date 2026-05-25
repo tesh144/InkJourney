@@ -108,6 +108,18 @@ public class MapInputController : MonoBehaviour
         }
     }
 
+    public void EnterExploreMode()
+    {
+        if (mapHUD        != null) mapHUD.SetActive(true);
+        if (exploreButton != null) exploreButton.SetActive(false);
+    }
+
+    public void ExitExploreMode()
+    {
+        if (mapHUD        != null) mapHUD.SetActive(false);
+        if (exploreButton != null) exploreButton.SetActive(true);
+    }
+
     private void OnEnable()  => MapLoader.onStyleChanged += OnMapStyleChanged;
     private void OnDisable() => MapLoader.onStyleChanged -= OnMapStyleChanged;
 
@@ -121,12 +133,6 @@ public class MapInputController : MonoBehaviour
         // Re-centre the scroll view so the player starts looking at their location
         if (MapLoader.instance != null && MapLoader.instance.resetScrollRect != null)
             MapLoader.instance.resetScrollRect.ResetToCentre();
-
-        if (mapHUD != null)
-            mapHUD.SetActive(false);
-
-        if (exploreButton != null)
-            exploreButton.SetActive(enableExploreButtonOnStyleChange);
     }
 
     private void Update()
@@ -232,6 +238,11 @@ public class MapInputController : MonoBehaviour
     }
 
     // ── Snap to max zoom ───────────────────────────────────────────────────
+
+    public void SetTargetZoom(float scale)
+    {
+        _targetScale = Mathf.Clamp(scale, minScale, maxScale);
+    }
 
     public void SnapToMaxZoom()
     {

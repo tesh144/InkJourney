@@ -209,13 +209,18 @@ public class MapLoader : MonoBehaviour
             }
         }
 
-        StartCoroutine(LoadMap());
+        StartCoroutine(LoadMapAt(GPSManager.Instance.latitude, GPSManager.Instance.longitude));
     }
 
-    private IEnumerator LoadMap()
+    public void LoadAtCoordinate(float lat, float lon)
     {
-        float lat = GPSManager.Instance.latitude;
-        float lon = GPSManager.Instance.longitude;
+        mapLoaded = false;
+        SetMainMapReloading(true);
+        StartCoroutine(LoadMapAt(lat, lon));
+    }
+
+    private IEnumerator LoadMapAt(float lat, float lon)
+    {
         CurrentMapCenterLat = lat;
         CurrentMapCenterLon = lon;
         string styleId = GetCurrentStyleId();

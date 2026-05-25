@@ -5,6 +5,7 @@ using TMPro;
 using UnityEngine;
 using Firebase.Firestore;
 using Firebase.Extensions;
+using Sirenix.OdinInspector;
 
 public class JourneyManager : MonoBehaviour
 {
@@ -22,6 +23,282 @@ public class JourneyManager : MonoBehaviour
 
     public static event Action onJourneyActivated;
     public static event Action onJourneyDeactivated;
+    public static event Action<GoogleSheetsFetcher.Entry> onStoryAddedToJourney;
+    public static event Action onJourneyCreationDistanceLimitReached;
+
+    // ── Journey Creation ──────────────────────────────────────────────────
+
+    [Header("Journey Creation")]
+    public float creationDistanceLimitMetres = 5000f;
+
+    [ShowInInspector, ReadOnly] public bool isCreatingJourney { get; private set; }
+    [ShowInInspector, ReadOnly] public string CreatingJourneyId    => creatingJourney?.ID          ?? "";
+    [ShowInInspector, ReadOnly] public string CreatingJourneyTitle => creatingJourney?.Title        ?? "";
+    [ShowInInspector, ReadOnly] public string CreatingJourneyDesc  => creatingJourney?.Description  ?? "";
+
+    public JourneyEntry creatingJourney { get; private set; }
+
+    private float _creationStartLat, _creationStartLon;
+    private Coroutine _saveDebounce;
+    private bool _isEditMode;
+
+    [ShowInInspector, ReadOnly] public bool isEditMode => _isEditMode;
+
+    public void BeginCreatingJourney()
+    {
+        if (isCreatingJourney) return;
+        isCreatingJourney = true;
+        creatingJourney = new JourneyEntry
+        {
+            ID          = Guid.NewGuid().ToString("N"),
+            Title       = "Untitled",
+            Description = "Add description...",
+            Draft       = true,
+            User        = UserProfileManager.instance?.UserId ?? "",
+            Created     = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            Chapters    = new List<JourneyEntry.ChapterDef>()
+        };
+        if (MapLoader.instance != null)
+            creatingJourney.MapStyleIndex = MapLoader.instance.currentStyleIndex;
+        if (GPSManager.Instance != null)
+        {
+            _creationStartLat = GPSManager.Instance.latitude;
+            _creationStartLon = GPSManager.Instance.longitude;
+        }
+        MapLoader.onStyleChanged     += OnCreationStyleChanged;
+        GPSManager.OnPositionSampled += OnCreationGpsSampled;
+
+        // Persist to Firestore immediately so it survives app restarts
+        GoogleSheetsFetcher.instance?.journeysList?.Add(creatingJourney);
+        PlayerPrefs.SetString("Journey.CreatingId", creatingJourney.ID);
+        PlayerPrefs.SetFloat("Journey.CreatingStartLat", _creationStartLat);
+        PlayerPrefs.SetFloat("Journey.CreatingStartLon", _creationStartLon);
+        PlayerPrefs.Save();
+        SaveJourneyToFirestore(creatingJourney);
+    }
+
+    public void SaveCreatingJourney()
+    {
+        if (!isCreatingJourney || creatingJourney == null) return;
+        if (_saveDebounce != null) StopCoroutine(_saveDebounce);
+        _saveDebounce = StartCoroutine(SaveCreatingJourneyDebounced());
+    }
+
+    private IEnumerator SaveCreatingJourneyDebounced()
+    {
+        yield return new WaitForSeconds(1f);
+        if (isCreatingJourney && creatingJourney != null)
+            SaveJourneyToFirestore(creatingJourney);
+        _saveDebounce = null;
+    }
+
+    public void BeginEditingJourney(JourneyEntry journey)
+    {
+        if (isCreatingJourney) return;
+        _isEditMode       = true;
+        isCreatingJourney = true;
+        creatingJourney   = journey;
+        if (GPSManager.Instance != null)
+        {
+            _creationStartLat = GPSManager.Instance.latitude;
+            _creationStartLon = GPSManager.Instance.longitude;
+        }
+        MapLoader.onStyleChanged     += OnCreationStyleChanged;
+        GPSManager.OnPositionSampled += OnCreationGpsSampled;
+        // Journey already exists in Firestore — no immediate save needed
+    }
+
+    public void AddStoryToCreatingJourney(GoogleSheetsFetcher.Entry story)
+    {
+        if (!isCreatingJourney || creatingJourney == null || story == null) return;
+        creatingJourney.Chapters.Add(new JourneyEntry.ChapterDef
+        {
+            Id              = Guid.NewGuid().ToString("N"),
+            StoryId         = story.ID,
+            Order           = creatingJourney.Chapters.Count,
+            InteractionType = "read"
+        });
+        SaveJourneyToFirestore(creatingJourney);
+        onStoryAddedToJourney?.Invoke(story);
+        GoogleSheetsFetcher.instance?.RefreshMap();
+    }
+
+    public void FinishCreatingJourney(string title, string description)
+    {
+        if (!isCreatingJourney || creatingJourney == null) return;
+        if (!_isEditMode && (creatingJourney.Chapters == null || creatingJourney.Chapters.Count == 0))
+        {
+            Debug.Log("[Journey] FinishCreatingJourney: 0 chapters — ignoring Finish (user must add at least one story)");
+            return;
+        }
+        creatingJourney.Title       = string.IsNullOrWhiteSpace(title) ? "My Journey" : title.Trim();
+        creatingJourney.Description = description ?? "";
+        creatingJourney.Draft       = false;
+        StopCreationTracking();
+        bool wasEdit = _isEditMode;
+        _isEditMode = false;
+        if (!wasEdit)
+        {
+            PlayerPrefs.DeleteKey("Journey.CreatingId");
+            PlayerPrefs.DeleteKey("Journey.CreatingStartLat");
+            PlayerPrefs.DeleteKey("Journey.CreatingStartLon");
+            PlayerPrefs.Save();
+        }
+        var j = creatingJourney;
+        isCreatingJourney = false;
+        creatingJourney   = null;
+        SaveJourneyToFirestore(j);
+        JourneyLibraryPanel.instance?.PopulateJourneysList();
+        if (!wasEdit)
+            ActivateJourney(j, showPopup: false);
+    }
+
+    public void CancelCreatingJourney()
+    {
+        Debug.Log($"[Journey] CancelCreatingJourney called\n{System.Environment.StackTrace}");
+        StopCreationTracking();
+        if (_isEditMode)
+        {
+            // Editing an existing journey — just exit, don't delete anything
+            _isEditMode       = false;
+            isCreatingJourney = false;
+            creatingJourney   = null;
+            return;
+        }
+        PlayerPrefs.DeleteKey("Journey.CreatingId");
+        PlayerPrefs.DeleteKey("Journey.CreatingStartLat");
+        PlayerPrefs.DeleteKey("Journey.CreatingStartLon");
+        PlayerPrefs.Save();
+        if (creatingJourney != null)
+        {
+            GoogleSheetsFetcher.instance?.journeysList?.Remove(creatingJourney);
+            FirebaseFirestore.DefaultInstance
+                .Collection("Journeys").Document(creatingJourney.ID)
+                .DeleteAsync();
+        }
+        isCreatingJourney = false;
+        creatingJourney   = null;
+    }
+
+    public void DeleteJourney(JourneyEntry journey)
+    {
+        if (journey == null) return;
+
+        string userId = UserProfileManager.instance?.UserId;
+
+        // Delete owned stories contained in the journey
+        var fetcher = GoogleSheetsFetcher.instance;
+        if (fetcher != null && journey.Chapters != null)
+        {
+            foreach (var chapter in journey.Chapters)
+            {
+                if (string.IsNullOrEmpty(chapter.StoryId)) continue;
+                var story = fetcher.storiesList?.Find(e => e?.ID == chapter.StoryId);
+                if (story != null && story.User == userId)
+                    fetcher.DeleteEntryFromFirestore(story);
+            }
+        }
+
+        // Delete the journey document and clean up local state
+        FirebaseFirestore.DefaultInstance
+            .Collection("Journeys").Document(journey.ID)
+            .DeleteAsync()
+            .ContinueWithOnMainThread(task =>
+            {
+                if (task.IsFaulted)
+                    Debug.LogWarning($"[Journey] Delete failed: {task.Exception}");
+            });
+
+        GoogleSheetsFetcher.instance?.journeysList?.Remove(journey);
+
+        if (activeJourney?.ID == journey.ID)
+            DeactivateJourney();
+
+        if (isCreatingJourney && creatingJourney?.ID == journey.ID)
+        {
+            StopCreationTracking();
+            _isEditMode = false;
+            isCreatingJourney = false;
+            creatingJourney = null;
+            PlayerPrefs.DeleteKey("Journey.CreatingId");
+            PlayerPrefs.Save();
+        }
+
+        // Delete progress record
+        if (!string.IsNullOrEmpty(userId))
+        {
+            FirebaseFirestore.DefaultInstance
+                .Collection(UserProfilesCollection).Document(userId)
+                .Collection(ProgressSubcollection).Document(journey.ID)
+                .DeleteAsync();
+        }
+
+        progressCache.Remove(journey.ID);
+        PlayerPrefs.DeleteKey(PrefKeyProgressPfx + journey.ID);
+        PlayerPrefs.Save();
+
+        JourneyLibraryPanel.instance?.PopulateJourneysList();
+        GoogleSheetsFetcher.instance?.RefreshMap();
+    }
+
+    private void StopCreationTracking()
+    {
+        MapLoader.onStyleChanged     -= OnCreationStyleChanged;
+        GPSManager.OnPositionSampled -= OnCreationGpsSampled;
+    }
+
+    private void OnCreationStyleChanged()
+    {
+        if (creatingJourney != null && MapLoader.instance != null)
+            creatingJourney.MapStyleIndex = MapLoader.instance.currentStyleIndex;
+    }
+
+    private void OnCreationGpsSampled(float lat, float lon)
+    {
+        if (!isCreatingJourney) return;
+        if (DistMetres(lat, lon, _creationStartLat, _creationStartLon) > creationDistanceLimitMetres)
+        {
+            onJourneyCreationDistanceLimitReached?.Invoke();
+            GPSManager.OnPositionSampled -= OnCreationGpsSampled;
+        }
+    }
+
+    private void SaveJourneyToFirestore(JourneyEntry journey)
+    {
+        string userId = UserProfileManager.instance?.UserId;
+        var chapters = new List<object>();
+        foreach (var ch in journey.Chapters)
+            chapters.Add(new Dictionary<string, object>
+            {
+                { "Id", ch.Id ?? "" }, { "StoryId", ch.StoryId ?? "" },
+                { "Order", ch.Order }, { "InteractionType", ch.InteractionType ?? "read" }
+            });
+        var data = new Dictionary<string, object>
+        {
+            { "Title",         journey.Title ?? "" },
+            { "Description",   journey.Description ?? "" },
+            { "FontID",        journey.FontID },
+            { "StickerID",     journey.StickerID },
+            { "MapStyleIndex", journey.MapStyleIndex },
+            { "Tags",          journey.Tags ?? new List<string>() },
+            { "Created",       journey.Created },
+            { "Chapters",      chapters },
+            { "User",          userId ?? "" },
+            { "Draft",         journey.Draft }
+        };
+        FirebaseFirestore.DefaultInstance
+            .Collection("Journeys").Document(journey.ID)
+            .SetAsync(data)
+            .ContinueWithOnMainThread(task =>
+            {
+                if (task.IsFaulted)
+                    Debug.LogWarning($"[Journey] Save failed: {task.Exception}");
+                else
+                    Debug.Log($"[Journey] Saved journey {journey.ID}");
+            });
+    }
+
+    // ── ─────────────────────────────────────────────────────────────────
 
     private readonly Dictionary<string, List<string>> progressCache = new Dictionary<string, List<string>>();
 
@@ -138,6 +415,28 @@ public class JourneyManager : MonoBehaviour
     {
         StartCoroutine(PrewarmJourneyPhotos());
 
+        // Restore in-progress creation if the app restarted mid-creation
+        string creatingId = PlayerPrefs.GetString("Journey.CreatingId", "");
+        if (!string.IsNullOrEmpty(creatingId))
+        {
+            var draft = GoogleSheetsFetcher.instance?.journeysList?.Find(j => j != null && j.ID == creatingId);
+            if (draft != null)
+            {
+                isCreatingJourney = true;
+                creatingJourney   = draft;
+                _creationStartLat = PlayerPrefs.GetFloat("Journey.CreatingStartLat", 0f);
+                _creationStartLon = PlayerPrefs.GetFloat("Journey.CreatingStartLon", 0f);
+                MapLoader.onStyleChanged     += OnCreationStyleChanged;
+                GPSManager.OnPositionSampled += OnCreationGpsSampled;
+                StartCoroutine(RestoreCreationStateNextFrame());
+                return;
+            }
+            PlayerPrefs.DeleteKey("Journey.CreatingId");
+            PlayerPrefs.DeleteKey("Journey.CreatingStartLat");
+            PlayerPrefs.DeleteKey("Journey.CreatingStartLon");
+            PlayerPrefs.Save();
+        }
+
         string savedId = PlayerPrefs.GetString(PrefKeyActiveId, "");
         if (!string.IsNullOrEmpty(savedId))
         {
@@ -147,10 +446,24 @@ public class JourneyManager : MonoBehaviour
         }
     }
 
+    private IEnumerator RestoreCreationStateNextFrame()
+    {
+        yield return null;
+        UIStateManager.instance?.ActivateCreateJourneySubState();
+    }
+
+
     private IEnumerator PrewarmJourneyPhotos()
     {
         // Wait for the map to finish its initial load before competing for bandwidth
         yield return new WaitUntil(() => MapLoader.instance != null && !MapLoader.instance.IsMainMapReloading);
+
+        // Re-sync pin positions now the map is ready
+        if (activeJourney != null)
+        {
+            GoogleSheetsFetcher.instance?.RefreshMap();
+            DrawJourneyRoute();
+        }
 
         var journeys = GoogleSheetsFetcher.instance?.journeysList;
         if (journeys == null) yield break;
@@ -317,6 +630,7 @@ public class JourneyManager : MonoBehaviour
             return true;
 
         bool isAnyJourneyChapter = false;
+        string currentUserId = UserProfileManager.instance?.UserId;
 
         foreach (var journey in GoogleSheetsFetcher.instance.journeysList)
         {
@@ -330,9 +644,15 @@ public class JourneyManager : MonoBehaviour
 
                 isAnyJourneyChapter = true;
 
+                // Owned journeys: all stories always visible
+                if (!string.IsNullOrEmpty(currentUserId) && journey.User == currentUserId)
+                    return true;
+
+                // Other journeys: first story always visible for discovery
                 if (chapter.Order == 0)
                     return true;
 
+                // Other journeys: completed chapters + next-in-chain visible when journey is active
                 if (activeJourney != null && activeJourney.ID == journey.ID)
                 {
                     var completedIds = GetCompletedChapterIds(journey.ID);
