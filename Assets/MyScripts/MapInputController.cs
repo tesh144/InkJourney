@@ -323,13 +323,45 @@ public class MapInputController : MonoBehaviour
     private void ApplyRotation()
     {
         if (mapContent == null) return;
-        float current = mapContent.localEulerAngles.z;
-        float smooth  = Mathf.LerpAngle(current, _targetRotation, rotationSmoothing * Time.deltaTime);
-        mapContent.localEulerAngles = new Vector3(0f, 0f, smooth);
 
-        // Compass arrow points opposite to map rotation so it reflects the heading
+        float oldAngle = mapContent.localEulerAngles.z;
+        float newAngle = Mathf.LerpAngle(oldAngle, _targetRotation, rotationSmoothing * Time.deltaTime);
+
+        if (_isPinching && _gestureLock == GestureLock.Rotate)
+        {
+            // Rotate around the pinch midpoint rather than the content pivot.
+            RectTransform viewport = _scrollRect.viewport != null
+                ? _scrollRect.viewport
+                : transform as RectTransform;
+            Camera cam = _rootCanvas != null && _rootCanvas.renderMode != RenderMode.ScreenSpaceOverlay
+                ? Camera.main : null;
+
+            RectTransformUtility.ScreenPointToLocalPointInRectangle(
+                viewport, _pinchMidpoint, cam, out Vector2 viewportPinch);
+
+            // Un-rotate the offset from content pivot → pinch point to get content-local coords
+            Vector2 contentScaled = RotateVector(viewportPinch - mapContent.anchoredPosition, -oldAngle);
+
+            mapContent.localEulerAngles = new Vector3(0f, 0f, newAngle);
+
+            // Shift content so the same map point sits under the pinch midpoint
+            mapContent.anchoredPosition = viewportPinch - RotateVector(contentScaled, newAngle);
+        }
+        else
+        {
+            mapContent.localEulerAngles = new Vector3(0f, 0f, newAngle);
+        }
+
         if (compassArrow != null)
-            compassArrow.localEulerAngles = new Vector3(0f, 0f, -smooth);
+            compassArrow.localEulerAngles = new Vector3(0f, 0f, -newAngle);
+    }
+
+    private static Vector2 RotateVector(Vector2 v, float degrees)
+    {
+        float rad = degrees * Mathf.Deg2Rad;
+        float cos = Mathf.Cos(rad);
+        float sin = Mathf.Sin(rad);
+        return new Vector2(v.x * cos - v.y * sin, v.x * sin + v.y * cos);
     }
 
     private void UpdateCompassVisibility()
